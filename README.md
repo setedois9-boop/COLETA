@@ -39,7 +39,7 @@ ponto-coleta-shopee/
 │   │   ├── pages/
 │   │   │   ├── Home.tsx        # Página inicial pública com Hero, Como Funciona, FAQ
 │   │   │   ├── CadastroConcluido.tsx # Conclusão com protocolo e WhatsApp
-│   │   │   ├── Cadastro/       # Formulário dividido em 8 etapas
+│   │   │   ├── Cadastro/       # Formulário dividido em 7 etapas otimizadas
 │   │   │   │   ├── Step1DadosLoja.tsx
 │   │   │   │   ├── Step2Imagens.tsx
 │   │   │   │   ├── Step3Endereco.tsx

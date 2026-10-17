@@ -38,6 +38,10 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             cidade: resultado.cidade || data.cidade,
             bairro: resultado.bairro || data.bairro,
             rua: resultado.rua || data.rua,
+            ...(resultado.latitude && resultado.longitude
+              ? { latitude: resultado.latitude, longitude: resultado.longitude }
+              : {}),
+            localizacao_confirmada: true,
           });
           setCepNotice('Endereço localizado com sucesso! Verifique o número e complemento.');
         } else {

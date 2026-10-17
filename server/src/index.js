@@ -24,9 +24,30 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
-// Servir arquivos de uploads estaticamente
+import fs from 'fs';
+import { authenticateToken } from './middleware/auth.js';
+
+// Servir arquivos de uploads com autenticação protegida e sanitização contra path traversal
 const uploadsDir = path.resolve(__dirname, '../uploads');
-app.use('/uploads', express.static(uploadsDir));
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+app.use('/uploads/:filename', authenticateToken, (req, res) => {
+  try {
+    const safeFilename = path.basename(req.params.filename);
+    const targetFile = path.join(uploadsDir, safeFilename);
+
+    if (!fs.existsSync(targetFile)) {
+      return res.status(404).json({ error: 'Arquivo solicitado não foi encontrado.' });
+    }
+
+    res.sendFile(targetFile);
+  } catch (error) {
+    console.error('Erro ao servir arquivo protegido:', error);
+    res.status(500).json({ error: 'Falha ao processar arquivo' });
+  }
+});
 
 // Rotas da API
 app.use('/api/solicitacoes', solicitacoesRoutes);

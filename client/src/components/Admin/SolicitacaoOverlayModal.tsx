@@ -25,6 +25,7 @@ import {
   fetchSolicitacaoDetalhes,
   updateSolicitacaoStatus,
   updateObservacoesInternas,
+  getMediaUrl,
 } from '../../services/api';
 import { Solicitacao } from '../../types';
 
@@ -358,11 +359,11 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                     </div>
                     {fachadaFile ? (
                       <div
-                        onClick={() => setActiveImageZoom(fachadaFile.caminho_arquivo)}
+                        onClick={() => setActiveImageZoom(getMediaUrl(fachadaFile.caminho_arquivo))}
                         className="relative h-44 rounded-lg overflow-hidden bg-slate-200 cursor-zoom-in group"
                       >
                         <img
-                          src={fachadaFile.caminho_arquivo}
+                          src={getMediaUrl(fachadaFile.caminho_arquivo)}
                           alt="Fachada do estabelecimento"
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         />
@@ -393,11 +394,11 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                     </div>
                     {interiorFile ? (
                       <div
-                        onClick={() => setActiveImageZoom(interiorFile.caminho_arquivo)}
+                        onClick={() => setActiveImageZoom(getMediaUrl(interiorFile.caminho_arquivo))}
                         className="relative h-44 rounded-lg overflow-hidden bg-slate-200 cursor-zoom-in group"
                       >
                         <img
-                          src={interiorFile.caminho_arquivo}
+                          src={getMediaUrl(interiorFile.caminho_arquivo)}
                           alt="Área interna do estabelecimento"
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         />
@@ -453,10 +454,12 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                     <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                       <MapPin className="w-4 h-4 text-orange-600" />
-                      3 & 4. Endereço e Localização
+                      3. Endereço do Estabelecimento
                     </h3>
                     <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${solicitacao.latitude},${solicitacao.longitude}`}
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                        `${solicitacao.rua}, ${solicitacao.numero}, ${solicitacao.bairro}, ${solicitacao.cidade} - ${solicitacao.estado}, ${solicitacao.cep}`
+                      )}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1"
@@ -498,7 +501,7 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-soft space-y-3">
                   <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-2.5">
                     <Clock className="w-4 h-4 text-orange-600" />
-                    5. Horários de Atendimento
+                    4. Horários de Atendimento
                   </h3>
                   <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5 text-center">
                     {['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'DOM'].map((dia) => {
@@ -535,7 +538,7 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-soft space-y-3">
                   <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-2.5">
                     <Car className="w-4 h-4 text-orange-600" />
-                    6. Estrutura e Serviços
+                    5. Estrutura e Serviços
                   </h3>
                   <div className="space-y-2 text-xs">
                     <div className="grid grid-cols-2 gap-2">
@@ -574,7 +577,7 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                   <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                     <User className="w-4 h-4 text-orange-600" />
-                    <span>7. Contato do Responsável & Dados Bancários</span>
+                    <span>6. Contato do Responsável & Dados Bancários</span>
                   </h3>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -741,7 +744,7 @@ export const SolicitacaoOverlayModal: React.FC<SolicitacaoOverlayModalProps> = (
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-soft space-y-3">
                   <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-2.5">
                     <FileText className="w-4 h-4 text-orange-600" />
-                    8. Origem da Descoberta
+                    7. Origem da Descoberta
                   </h3>
                   <p className="text-xs text-slate-800">
                     Fonte informada:{' '}

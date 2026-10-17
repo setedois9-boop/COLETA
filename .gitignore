@@ -27,9 +27,13 @@ server/uploads/*
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
 client/.env
+client/.env.*
 client/.env.local
 server/.env
+server/.env.*
 
 # Editor & OS files
 .vscode/*

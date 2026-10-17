@@ -19,6 +19,38 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Helper para resolução segura de arquivos anexados com token de autorização
+export function getMediaUrl(pathOrUrl?: string): string {
+  if (!pathOrUrl) return '';
+  if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://') || pathOrUrl.startsWith('blob:') || pathOrUrl.startsWith('data:')) {
+    return pathOrUrl;
+  }
+  const token = getAuthToken();
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+
+  if (API_BASE.startsWith('http')) {
+    const origin = new URL(API_BASE).origin;
+    return `${origin}${pathOrUrl.startsWith('/') ? '' : '/'}${pathOrUrl}${tokenParam}`;
+  }
+  return `${pathOrUrl}${tokenParam}`;
+}
+
+export async function changeAdminPassword(senha_atual: string, nova_senha: string): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/admin/password`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({ senha_atual, nova_senha }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || 'Falha ao alterar senha.');
+  }
+  return data;
+}
+
 // 1. Obter configurações públicas do site
 export async function fetchSiteConfig(): Promise<SiteConfig> {
   const res = await fetch(`${API_BASE}/config`);
@@ -143,9 +175,31 @@ export async function consultarCEP(cep: string): Promise<{
   bairro: string;
   cidade: string;
   estado: string;
+  latitude?: number;
+  longitude?: number;
 } | null> {
   const limpo = cep.replace(/\D/g, '');
   if (limpo.length !== 8) return null;
+
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/cep/v2/${limpo}`);
+    if (res.ok) {
+      const data = await res.json();
+      const coords = data.location?.coordinates;
+      const lat = coords?.latitude ? parseFloat(coords.latitude) : undefined;
+      const lng = coords?.longitude ? parseFloat(coords.longitude) : undefined;
+      return {
+        rua: data.street || '',
+        bairro: data.neighborhood || '',
+        cidade: data.city || '',
+        estado: data.state || '',
+        latitude: !isNaN(Number(lat)) ? lat : undefined,
+        longitude: !isNaN(Number(lng)) ? lng : undefined,
+      };
+    }
+  } catch (e) {
+    console.warn('BrasilAPI v2 falhou, tentando fallback:', e);
+  }
 
   try {
     const res = await fetch(`https://brasilapi.com.br/api/cep/v1/${limpo}`);
@@ -159,7 +213,7 @@ export async function consultarCEP(cep: string): Promise<{
       };
     }
   } catch (e) {
-    console.warn('BrasilAPI falhou, tentando ViaCEP:', e);
+    console.warn('BrasilAPI v1 falhou, tentando ViaCEP:', e);
   }
 
   try {

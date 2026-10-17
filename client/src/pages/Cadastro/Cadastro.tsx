@@ -6,7 +6,6 @@ import { StepIndicator } from './StepIndicator';
 import { Step1DadosLoja } from './Step1DadosLoja';
 import { Step2Imagens } from './Step2Imagens';
 import { Step3Endereco } from './Step3Endereco';
-import { Step4Mapa } from './Step4Mapa';
 import { Step5Horarios } from './Step5Horarios';
 import { Step6InfoAdicional } from './Step6InfoAdicional';
 import { Step7ContatoFinanceiro } from './Step7ContatoFinanceiro';
@@ -19,7 +18,6 @@ const STEP_TITLES = [
   'Dados do Estabelecimento',
   'Imagens da Loja',
   'Endereço da Loja',
-  'Localização no Mapa',
   'Dias e Horários',
   'Informações Adicionais',
   'Contato e Recebimento',
@@ -43,7 +41,7 @@ const INITIAL_FORM_DATA: FormDataCadastro = {
   complemento: '',
   latitude: -23.55052,
   longitude: -46.633308,
-  localizacao_confirmada: false,
+  localizacao_confirmada: true,
   dias_funcionamento: ['SEG', 'TER', 'QUA', 'QUI', 'SEX'],
   horarios_funcionamento: {
     SEG: { aberto: true, abertura: '08:00', fechamento: '18:00' },
@@ -126,7 +124,7 @@ export const Cadastro: React.FC = () => {
 
   const handleNext = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    setCurrentStep((prev) => Math.min(prev + 1, 8));
+    setCurrentStep((prev) => Math.min(prev + 1, 7));
   };
 
   const handlePrev = () => {
@@ -171,7 +169,7 @@ export const Cadastro: React.FC = () => {
 
       <StepIndicator
         currentStep={currentStep}
-        totalSteps={8}
+        totalSteps={7}
         stepTitles={STEP_TITLES}
         onSelectStep={handleJumpToStep}
       />
@@ -207,15 +205,6 @@ export const Cadastro: React.FC = () => {
           )}
 
           {currentStep === 4 && (
-            <Step4Mapa
-              data={formData}
-              updateData={updateFormData}
-              onNext={handleNext}
-              onPrev={handlePrev}
-            />
-          )}
-
-          {currentStep === 5 && (
             <Step5Horarios
               data={formData}
               updateData={updateFormData}
@@ -224,7 +213,7 @@ export const Cadastro: React.FC = () => {
             />
           )}
 
-          {currentStep === 6 && (
+          {currentStep === 5 && (
             <Step6InfoAdicional
               data={formData}
               updateData={updateFormData}
@@ -234,7 +223,7 @@ export const Cadastro: React.FC = () => {
             />
           )}
 
-          {currentStep === 7 && (
+          {currentStep === 6 && (
             <Step7ContatoFinanceiro
               data={formData}
               updateData={updateFormData}
@@ -245,7 +234,7 @@ export const Cadastro: React.FC = () => {
             />
           )}
 
-          {currentStep === 8 && (
+          {currentStep === 7 && (
             <Step8OrigemRevisao
               data={formData}
               updateData={updateFormData}

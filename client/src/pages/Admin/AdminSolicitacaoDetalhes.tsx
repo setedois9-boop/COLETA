@@ -28,6 +28,7 @@ import {
   updateSolicitacaoStatus,
   updateObservacoesInternas,
   deleteSolicitacao,
+  getMediaUrl,
 } from '../../services/api';
 import { Solicitacao } from '../../types';
 
@@ -247,7 +248,7 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Coluna da Esquerda: As 8 Etapas Detalhadas */}
+        {/* Coluna da Esquerda: As 7 Etapas Detalhadas */}
         <div className="lg:col-span-8 space-y-6">
           {/* Seção 1: Estabelecimento */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft space-y-4">
@@ -291,11 +292,11 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
                 <span className="text-xs font-bold text-slate-700 block">Fachada do Comércio</span>
                 {fachadaFile ? (
                   <div
-                    onClick={() => setActiveImageZoom(fachadaFile.caminho_arquivo)}
+                    onClick={() => setActiveImageZoom(getMediaUrl(fachadaFile.caminho_arquivo))}
                     className="aspect-4/3 rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative cursor-pointer group"
                   >
                     <img
-                      src={fachadaFile.caminho_arquivo}
+                      src={getMediaUrl(fachadaFile.caminho_arquivo)}
                       alt="Fachada da loja"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                     />
@@ -315,11 +316,11 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
                 <span className="text-xs font-bold text-slate-700 block">Área Interna (Pacotes)</span>
                 {interiorFile ? (
                   <div
-                    onClick={() => setActiveImageZoom(interiorFile.caminho_arquivo)}
+                    onClick={() => setActiveImageZoom(getMediaUrl(interiorFile.caminho_arquivo))}
                     className="aspect-4/3 rounded-2xl overflow-hidden bg-slate-900 border border-slate-200 relative cursor-pointer group"
                   >
                     <img
-                      src={interiorFile.caminho_arquivo}
+                      src={getMediaUrl(interiorFile.caminho_arquivo)}
                       alt="Interior da loja"
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                     />
@@ -336,15 +337,17 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
             </div>
           </div>
 
-          {/* Seção 3 & 4: Endereço & Mapa */}
+          {/* Seção 3: Endereço */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-orange-600" />
-                3 & 4. Endereço e Localização Geográfica
+                3. Endereço do Estabelecimento
               </h3>
               <a
-                href={`https://www.google.com/maps/search/?api=1&query=${solicitacao.latitude},${solicitacao.longitude}`}
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                  `${solicitacao.rua}, ${solicitacao.numero}, ${solicitacao.bairro}, ${solicitacao.cidade} - ${solicitacao.estado}, ${solicitacao.cep}`
+                )}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1"
@@ -380,11 +383,11 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
             </div>
           </div>
 
-          {/* Seção 5: Horários */}
+          {/* Seção 4: Horários */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft space-y-4">
             <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <Clock className="w-4 h-4 text-orange-600" />
-              5. Horários de Funcionamento
+              4. Horários de Funcionamento
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
               {['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'DOM'].map((dia) => {
@@ -422,7 +425,7 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft space-y-4">
             <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <Car className="w-4 h-4 text-orange-600" />
-              6. Estrutura Operacional e Serviços
+              5. Estrutura Operacional e Serviços
             </h3>
             <div className="space-y-3 text-xs">
               <div>
@@ -453,12 +456,12 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
             </div>
           </div>
 
-          {/* Seção 7: Contato e Financeiro */}
+          {/* Seção 6: Contato e Financeiro */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
                 <User className="w-4 h-4 text-orange-600" />
-                7. Contato do Responsável & Dados Financeiros
+                6. Contato do Responsável & Dados Financeiros
               </h3>
               <button
                 type="button"
@@ -569,11 +572,11 @@ export const AdminSolicitacaoDetalhes: React.FC = () => {
             </div>
           </div>
 
-          {/* Seção 8: Origem */}
+          {/* Seção 7: Origem */}
           <div className="bg-white p-6 rounded-3xl border border-slate-200/90 shadow-soft text-xs space-y-2">
             <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <FileText className="w-4 h-4 text-orange-600" />
-              8. Origem da Descoberta
+              7. Origem da Descoberta
             </h3>
             <p className="text-slate-800 font-medium">
               Origem informada:{' '}

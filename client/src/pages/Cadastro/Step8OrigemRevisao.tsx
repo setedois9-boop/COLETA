@@ -212,12 +212,12 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
             </div>
           </div>
 
-          {/* Card 3: Endereço & Mapa */}
+          {/* Card 3: Endereço da Loja */}
           <div className="bg-slate-50/80 border border-slate-200/90 rounded-2xl p-4 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-orange-600 flex items-center gap-1">
-                  <MapPin className="w-3.5 h-3.5" /> 3 & 4. Endereço e Mapa
+                  <MapPin className="w-3.5 h-3.5" /> 3. Endereço da Loja
                 </span>
                 <button
                   type="button"
@@ -234,9 +234,6 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
                 {data.bairro} — {data.cidade}/{data.estado}
               </p>
               <p className="text-xs text-slate-500 font-mono mt-0.5">CEP: {data.cep}</p>
-              <p className="text-[11px] text-emerald-700 mt-1 font-medium">
-                Localização no mapa confirmada ({data.latitude?.toFixed(4)}, {data.longitude?.toFixed(4)})
-              </p>
             </div>
           </div>
 
@@ -245,11 +242,11 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-orange-600 flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5" /> 5. Horários de Atendimento
+                  <Clock className="w-3.5 h-3.5" /> 4. Horários de Atendimento
                 </span>
                 <button
                   type="button"
-                  onClick={() => onJumpToStep(5)}
+                  onClick={() => onJumpToStep(4)}
                   className="text-xs text-orange-600 hover:text-orange-700 font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Edit2 className="w-3 h-3" /> Editar
@@ -271,11 +268,11 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-orange-600 flex items-center gap-1">
-                  <Car className="w-3.5 h-3.5" /> 6. Operação da Loja
+                  <Car className="w-3.5 h-3.5" /> 5. Operação da Loja
                 </span>
                 <button
                   type="button"
-                  onClick={() => onJumpToStep(6)}
+                  onClick={() => onJumpToStep(5)}
                   className="text-xs text-orange-600 hover:text-orange-700 font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Edit2 className="w-3 h-3" /> Editar
@@ -294,11 +291,11 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-orange-600 flex items-center gap-1">
-                  <User className="w-3.5 h-3.5" /> 7. Responsável & Bancos
+                  <User className="w-3.5 h-3.5" /> 6. Responsável & Bancos
                 </span>
                 <button
                   type="button"
-                  onClick={() => onJumpToStep(7)}
+                  onClick={() => onJumpToStep(6)}
                   className="text-xs text-orange-600 hover:text-orange-700 font-bold flex items-center gap-1 cursor-pointer"
                 >
                   <Edit2 className="w-3 h-3" /> Editar

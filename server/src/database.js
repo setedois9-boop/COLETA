@@ -152,21 +152,23 @@ export function initDatabase() {
   }
 
   // Seed default admin if none exists
-  const adminCount = db.prepare('SELECT count(*) as count FROM administradores').get();
-  if (adminCount.count === 0) {
+  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@pontodecoleta.com.br').trim().toLowerCase();
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
+  const existingAdmin = db.prepare('SELECT id, email FROM administradores WHERE email = ?').get(adminEmail);
+  if (!existingAdmin) {
     const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync('Admin@2026', salt);
+    const hash = bcrypt.hashSync(adminPassword, salt);
     db.prepare(`
       INSERT INTO administradores (nome, email, senha_hash, permissao, criado_em)
       VALUES (?, ?, ?, ?, ?)
     `).run(
       'Administrador Geral',
-      'admin@pontodecoleta.com.br',
+      adminEmail,
       hash,
       'superadmin',
       new Date().toISOString()
     );
-    console.log('Admin inicial criado com sucesso: admin@pontodecoleta.com.br / Admin@2026');
+    console.log(`Admin inicial configurado com sucesso: ${adminEmail}`);
   }
 
   // Seed default site settings if none exist

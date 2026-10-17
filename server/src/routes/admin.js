@@ -7,9 +7,43 @@ import { authenticateToken, generateToken } from '../middleware/auth.js';
 
 const router = Router();
 
+// Proteção contra ataques de força bruta no login administrativo
+const loginAttempts = new Map();
+
+function checkLoginThrottle(ip) {
+  const record = loginAttempts.get(ip);
+  if (!record) return { allowed: true };
+  if (record.lockedUntil && record.lockedUntil > Date.now()) {
+    const minutesLeft = Math.ceil((record.lockedUntil - Date.now()) / 60000);
+    return { allowed: false, minutesLeft };
+  }
+  return { allowed: true };
+}
+
+function recordFailedLogin(ip) {
+  const record = loginAttempts.get(ip) || { count: 0, firstAttempt: Date.now() };
+  record.count += 1;
+  if (record.count >= 5) {
+    record.lockedUntil = Date.now() + 15 * 60 * 1000; // Bloqueio de 15 minutos
+  }
+  loginAttempts.set(ip, record);
+}
+
+function clearLoginAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
 // POST /api/admin/login - Autenticação de administradores com suporte a 2FA do Google Authenticator
 router.post('/login', (req, res) => {
   try {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const throttle = checkLoginThrottle(ip);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
     const { email, senha, two_factor_code } = req.body;
 
     if (!email || !senha) {
@@ -18,11 +52,13 @@ router.post('/login', (req, res) => {
 
     const admin = db.prepare('SELECT * FROM administradores WHERE email = ?').get(email.trim().toLowerCase());
     if (!admin) {
+      recordFailedLogin(ip);
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
     const match = bcrypt.compareSync(senha, admin.senha_hash);
     if (!match) {
+      recordFailedLogin(ip);
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
@@ -43,11 +79,14 @@ router.post('/login', (req, res) => {
       });
 
       if (!verification || !verification.valid) {
+        recordFailedLogin(ip);
         return res.status(401).json({
           error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
         });
       }
     }
+
+    clearLoginAttempts(ip);
 
     const token = generateToken({
       id: admin.id,
@@ -405,6 +444,38 @@ router.get('/export/csv', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('Erro na exportação CSV:', error);
     res.status(500).json({ error: 'Erro ao gerar arquivo CSV' });
+  }
+});
+
+// PUT /api/admin/password - Alterar senha administrativa
+router.put('/password', authenticateToken, (req, res) => {
+  try {
+    const { senha_atual, nova_senha } = req.body;
+    if (!senha_atual || !nova_senha) {
+      return res.status(400).json({ error: 'Senha atual e nova senha são obrigatórias.' });
+    }
+    if (String(nova_senha).length < 8) {
+      return res.status(400).json({ error: 'A nova senha deve possuir no mínimo 8 caracteres.' });
+    }
+
+    const admin = db.prepare('SELECT id, senha_hash FROM administradores WHERE id = ?').get(req.user.id);
+    if (!admin) {
+      return res.status(404).json({ error: 'Administrador não encontrado.' });
+    }
+
+    const match = bcrypt.compareSync(senha_atual, admin.senha_hash);
+    if (!match) {
+      return res.status(401).json({ error: 'A senha atual informada está incorreta.' });
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    const novoHash = bcrypt.hashSync(nova_senha, salt);
+    db.prepare('UPDATE administradores SET senha_hash = ? WHERE id = ?').run(novoHash, req.user.id);
+
+    res.json({ success: true, message: 'Senha administrativa atualizada com sucesso!' });
+  } catch (err) {
+    console.error('Erro ao alterar senha:', err);
+    res.status(500).json({ error: 'Falha ao alterar senha.' });
   }
 });
 
