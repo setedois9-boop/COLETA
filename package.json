@@ -1,0 +1,23 @@
+{
+  "name": "ponto-coleta-shopee",
+  "version": "1.0.0",
+  "description": "Sistema completo para cadastro de pontos de coleta de encomendas com painel administrativo e WhatsApp integrado",
+  "scripts": {
+    "dev": "npx -y concurrently -k -n \"SERVER,CLIENT\" -c \"blue,green\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client",
+    "start": "npm run dev"
+  },
+  "keywords": [
+    "ponto-de-coleta",
+    "logistica",
+    "cadastro",
+    "whatsapp",
+    "admin-dashboard",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC"
+}
