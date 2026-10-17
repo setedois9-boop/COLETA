@@ -9,6 +9,13 @@
     "build": "npm run build --prefix client",
     "start": "npm run dev"
   },
+  "type": "module",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "bcryptjs": "^3.0.2",
+    "busboy": "^1.6.0",
+    "jsonwebtoken": "^9.0.2"
+  },
   "keywords": [
     "ponto-de-coleta",
     "logistica",
