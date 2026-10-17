@@ -147,6 +147,22 @@ export const Cadastro: React.FC = () => {
       localStorage.removeItem('rascunho_cadastro');
       localStorage.removeItem('rascunho_cadastro_v2');
 
+      // Notificar imediatamente o painel do administrador em tempo real (0ms de latência)
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('coleta_live_channel');
+          bc.postMessage({ type: 'NOVO_CADASTRO', solicitacao: response });
+          bc.close();
+        }
+      } catch {}
+
+      try {
+        localStorage.setItem(
+          'coleta_evento_imediato',
+          JSON.stringify({ type: 'NOVO_CADASTRO', solicitacao: response, timestamp: Date.now() })
+        );
+      } catch {}
+
       // Navegar para a página de conclusão com os dados da solicitação
       navigate('/cadastro/concluido', {
         state: {

@@ -75,7 +75,8 @@ router.post('/login', (req, res) => {
       const cleanCode = String(two_factor_code).replace(/\D/g, '');
       const verification = verifySync({
         token: cleanCode,
-        secret: admin.two_factor_secret
+        secret: admin.two_factor_secret,
+        epochTolerance: 30
       });
 
       if (!verification || !verification.valid) {
@@ -189,7 +190,8 @@ router.post('/2fa/verify-and-enable', authenticateToken, (req, res) => {
     const cleanCode = String(token).replace(/\D/g, '');
     const verification = verifySync({
       token: cleanCode,
-      secret: admin.two_factor_temp_secret
+      secret: admin.two_factor_temp_secret,
+      epochTolerance: 30
     });
 
     if (!verification || !verification.valid) {

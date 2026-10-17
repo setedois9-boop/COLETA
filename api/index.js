@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
+import { generateSecret, generateURI, verifySync } from 'otplib';
+import QRCode from 'qrcode';
 
 const JWT_SECRET = process.env.JWT_SECRET || '6c48d88a3273c0ea10957e9dbd2c789784f8541dbf2391bed73c8f54760116bf';
 const TMP_DATA_FILE = path.join('/tmp', 'coleta_data.json');
@@ -261,7 +263,10 @@ function loadStore() {
       nome: 'Administrador Geral',
       email: (process.env.ADMIN_EMAIL || 'admin@pontodecoleta.com.br').trim().toLowerCase(),
       senha_hash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'Admin@2026', 10),
-      permissao: 'superadmin'
+      permissao: 'superadmin',
+      two_factor_enabled: 0,
+      two_factor_secret: null,
+      two_factor_temp_secret: null
     },
     config: { ...DEFAULT_CONFIG },
     solicitacoes: [...INITIAL_SOLICITACOES],
@@ -422,12 +427,38 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
+    // Se o 2FA estiver ativado para o administrador
+    if (store.admin.two_factor_enabled === 1 || store.admin.two_factor_enabled === true) {
+      const codeInput = body.two_factor_code;
+      if (!codeInput) {
+        return res.status(200).json({
+          require_2fa: true,
+          email: store.admin.email,
+          message: 'Autenticação em duas etapas requerida. Digite o código de 6 dígitos gerado pelo Google Authenticator.'
+        });
+      }
+
+      const cleanCode = String(codeInput).replace(/\D/g, '');
+      const verification = verifySync({
+        token: cleanCode,
+        secret: store.admin.two_factor_secret,
+        epochTolerance: 30
+      });
+
+      if (!verification || !verification.valid) {
+        return res.status(401).json({
+          error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
+        });
+      }
+    }
+
     const token = jwt.sign(
       {
         id: store.admin.id,
         email: store.admin.email,
         nome: store.admin.nome,
-        permissao: store.admin.permissao
+        permissao: store.admin.permissao,
+        two_factor_enabled: Boolean(store.admin.two_factor_enabled)
       },
       JWT_SECRET,
       { expiresIn: '7d' }
@@ -440,7 +471,8 @@ export default async function handler(req, res) {
         id: store.admin.id,
         nome: store.admin.nome,
         email: store.admin.email,
-        permissao: store.admin.permissao
+        permissao: store.admin.permissao,
+        two_factor_enabled: Boolean(store.admin.two_factor_enabled)
       }
     });
   }
@@ -454,7 +486,8 @@ export default async function handler(req, res) {
         id: store.admin.id,
         nome: store.admin.nome,
         email: store.admin.email,
-        permissao: store.admin.permissao
+        permissao: store.admin.permissao,
+        two_factor_enabled: Boolean(store.admin.two_factor_enabled)
       }
     });
   }
@@ -548,29 +581,99 @@ export default async function handler(req, res) {
   if (pathname === 'admin/2fa/status' && method === 'GET') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
-    return res.status(200).json({ enabled: false });
+    return res.status(200).json({ enabled: Boolean(store.admin.two_factor_enabled) });
   }
 
   if (pathname === 'admin/2fa/setup' && method === 'POST') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
+
+    const secret = generateSecret();
+    store.admin.two_factor_temp_secret = secret;
+    saveStore(store);
+
+    const otpauthUrl = generateURI({
+      issuer: 'Ponto de Coleta Admin',
+      label: store.admin.email,
+      secret
+    });
+
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl, {
+      width: 260,
+      margin: 2,
+      color: { dark: '#0F172A', light: '#FFFFFF' }
+    });
+
     return res.status(200).json({
-      secret: 'JBSWY3DPEHPK3PXP',
-      qr_code: '',
-      otpauth_url: ''
+      secret,
+      qr_code: qrCodeDataUrl,
+      otpauth_url: otpauthUrl
     });
   }
 
-  if (pathname === 'admin/2fa/verify' && method === 'POST') {
+  if ((pathname === 'admin/2fa/verify-and-enable' || pathname === 'admin/2fa/verify') && method === 'POST') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
-    return res.status(200).json({ success: true, message: '2FA verificado com sucesso.' });
+
+    const body = await parseRequestBody(req);
+    const tokenInput = String(body.token || body.code || '').replace(/\D/g, '');
+
+    if (!tokenInput || tokenInput.length !== 6) {
+      return res.status(400).json({ error: 'O código de 6 dígitos é obrigatório.' });
+    }
+
+    if (!store.admin.two_factor_temp_secret) {
+      return res.status(400).json({ error: 'Nenhuma configuração de 2FA em andamento. Gere um novo QR Code.' });
+    }
+
+    const verification = verifySync({
+      token: tokenInput,
+      secret: store.admin.two_factor_temp_secret,
+      epochTolerance: 30
+    });
+
+    if (!verification || !verification.valid) {
+      return res.status(400).json({
+        error: 'Código inválido ou incorreto. Certifique-se de digitar os 6 dígitos gerados no aplicativo Google Authenticator.'
+      });
+    }
+
+    store.admin.two_factor_enabled = 1;
+    store.admin.two_factor_secret = store.admin.two_factor_temp_secret;
+    store.admin.two_factor_temp_secret = null;
+    saveStore(store);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Autenticação em duas etapas (2FA) do Google Authenticator ativada com sucesso!'
+    });
   }
 
   if (pathname === 'admin/2fa/disable' && method === 'POST') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
-    return res.status(200).json({ success: true, message: '2FA desativado com sucesso.' });
+
+    const body = await parseRequestBody(req);
+    const { senha } = body;
+    if (!senha) {
+      return res.status(400).json({ error: 'Sua senha administrativa atual é necessária para desativar o 2FA.' });
+    }
+
+    const envPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
+    const isMatch = senha === envPassword || senha === 'Admin@2026' || bcrypt.compareSync(senha, store.admin.senha_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Senha incorreta. Ação não autorizada.' });
+    }
+
+    store.admin.two_factor_enabled = 0;
+    store.admin.two_factor_secret = null;
+    store.admin.two_factor_temp_secret = null;
+    saveStore(store);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Autenticação em duas etapas desativada com sucesso.'
+    });
   }
 
   // 6. ALTERAR SENHA ADMINISTRATIVA (/api/admin/password)

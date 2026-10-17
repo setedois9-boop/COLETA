@@ -222,13 +222,36 @@ export const LiveUpdatesProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }
     };
 
-    // Executar imediatamente e depois a cada 5 segundos
+    // Executar imediatamente e depois a cada 2 segundos (notificação ultra-rápida)
     poll();
-    const interval = setInterval(poll, 5000);
+    const interval = setInterval(poll, 2000);
+
+    // Ouvinte instantâneo de novo cadastro via BroadcastChannel (0ms de delay)
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        bc = new BroadcastChannel('coleta_live_channel');
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'NOVO_CADASTRO' && isMounted) {
+            poll();
+          }
+        };
+      }
+    } catch {}
+
+    // Ouvinte via Storage Event para navegadores ou abas distintas
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'coleta_evento_imediato' && e.newValue && isMounted) {
+        poll();
+      }
+    };
+    window.addEventListener('storage', handleStorageEvent);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
+      if (bc) bc.close();
+      window.removeEventListener('storage', handleStorageEvent);
     };
   }, [isInAdminPanel, soundEnabled, navigate]);
 

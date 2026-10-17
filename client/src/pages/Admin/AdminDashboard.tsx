@@ -67,7 +67,7 @@ export const AdminDashboard: React.FC = () => {
     loadData(true);
     const interval = setInterval(() => {
       loadData(false);
-    }, 5000);
+    }, 2500);
 
     return () => clearInterval(interval);
   }, []);
@@ -116,7 +116,7 @@ export const AdminDashboard: React.FC = () => {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              Ao vivo • Atualiza a cada 5s
+              Ao vivo • Tempo Real
             </span>
           </div>
           <p className="text-slate-500 text-xs sm:text-sm mt-1">

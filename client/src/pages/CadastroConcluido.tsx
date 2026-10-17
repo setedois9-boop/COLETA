@@ -144,6 +144,24 @@ export const CadastroConcluido: React.FC = () => {
             </div>
           </div>
 
+          {/* Card de Notificação Rápida */}
+          <div className="bg-emerald-50 border border-emerald-200/90 rounded-2xl p-4 sm:p-5 mb-6 text-left flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm mt-0.5">
+              <MessageCircle className="w-5 h-5 fill-white" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-xs sm:text-sm font-extrabold text-emerald-950 flex items-center gap-2">
+                Notificação Rápida de Atendimento
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200 text-emerald-900">
+                  Prioritário
+                </span>
+              </h4>
+              <p className="text-[11px] sm:text-xs text-emerald-800 leading-relaxed">
+                Nossa central de triagem já foi notificada do seu cadastro! Para agilizar sua avaliação geográfica e receber o checklist de requisitos, confirme seu protocolo pelo WhatsApp abaixo:
+              </p>
+            </div>
+          </div>
+
           {/* Aviso Legal de Não Aprovação Automática */}
           <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 sm:p-4 mb-6 sm:mb-8 text-left flex items-start gap-3">
             <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
