@@ -99,7 +99,8 @@ export const AdminDashboard: React.FC = () => {
     mes_atual: 0,
   };
 
-  const maxTimelineCount = Math.max(1, ...(data?.timeline.map((t) => t.quantidade) || [1]));
+  const timelineList = data?.timeline || [];
+  const maxTimelineCount = Math.max(1, ...timelineList.map((t) => t.quantidade), 1);
 
   return (
     <div className="p-4 sm:p-8 lg:p-10 space-y-6 sm:space-y-8 max-w-full overflow-x-hidden">
@@ -254,7 +255,7 @@ export const AdminDashboard: React.FC = () => {
 
           <div className="overflow-x-auto max-w-full pb-2">
             <div className="min-w-[400px] sm:min-w-0 h-56 flex items-end justify-between gap-2 pt-6 pb-2 px-2">
-              {data?.timeline.map((item, i) => {
+              {timelineList.map((item, i) => {
                 const heightPercent = Math.max(8, Math.round((item.quantidade / maxTimelineCount) * 100));
                 return (
                   <div key={i} className="flex-1 flex flex-col items-center gap-2 group h-full justify-end">

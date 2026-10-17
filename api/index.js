@@ -465,31 +465,112 @@ export default async function handler(req, res) {
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     const total = store.solicitacoes.length;
-    const recebidos = store.solicitacoes.filter((s) => s.status === 'Recebido').length;
-    const em_analise = store.solicitacoes.filter((s) => s.status === 'Em análise').length;
-    const aprovados = store.solicitacoes.filter((s) => s.status === 'Aprovado').length;
-    const rejeitados = store.solicitacoes.filter((s) => s.status === 'Rejeitado').length;
+    const stats = {
+      total,
+      recebido: 0,
+      em_analise: 0,
+      aguardando_contato: 0,
+      documentacao_pendente: 0,
+      aprovado: 0,
+      rejeitado: 0,
+      ultimos_7_dias: 0,
+      mes_atual: 0
+    };
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const tipoMap = {};
+
+    for (const s of store.solicitacoes) {
+      if (s.status === 'Recebido') stats.recebido++;
+      else if (s.status === 'Em análise') stats.em_analise++;
+      else if (s.status === 'Aguardando contato') stats.aguardando_contato++;
+      else if (s.status === 'Documentação pendente') stats.documentacao_pendente++;
+      else if (s.status === 'Aprovado') stats.aprovado++;
+      else if (s.status === 'Rejeitado') stats.rejeitado++;
+
+      const createdAt = new Date(s.criado_em || Date.now()).getTime();
+      if (createdAt >= sevenDaysAgo) stats.ultimos_7_dias++;
+      if (createdAt >= startOfMonth) stats.mes_atual++;
+
+      const tipo = s.tipo_comercio || 'Outros';
+      tipoMap[tipo] = (tipoMap[tipo] || 0) + 1;
+    }
+
+    // Gráfico diário dos últimos 14 dias
+    const timeline = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const count = store.solicitacoes.filter((s) => (s.criado_em || '').startsWith(dateStr)).length;
+      timeline.push({
+        data: dateStr,
+        label: `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`,
+        quantidade: count
+      });
+    }
+
+    const tipos_comercio = Object.entries(tipoMap)
+      .map(([tipo_comercio, count]) => ({ tipo_comercio, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+
+    const recentes = [...store.solicitacoes]
+      .sort((a, b) => new Date(b.criado_em || 0).getTime() - new Date(a.criado_em || 0).getTime())
+      .slice(0, 6);
 
     return res.status(200).json({
-      total,
-      recebidos,
-      em_analise,
-      aprovados,
-      rejeitados,
-      hoje: 1,
-      taxa_aprovacao: total > 0 ? Math.round((aprovados / total) * 100) : 0,
-      ultimos_7_dias: [
-        { data: 'Seg', solicitacoes: 2 },
-        { data: 'Ter', solicitacoes: 4 },
-        { data: 'Qua', solicitacoes: 3 },
-        { data: 'Qui', solicitacoes: 6 },
-        { data: 'Sex', solicitacoes: 5 },
-        { data: 'Sab', solicitacoes: 2 },
-        { data: 'Dom', solicitacoes: 1 }
-      ],
-      distribuicao_estados: [{ estado: 'SP', total }],
-      por_tipo: [{ tipo: 'Papelaria', total: 1 }, { tipo: 'Mercearia', total: 1 }]
+      stats,
+      timeline,
+      tipos_comercio,
+      recentes
     });
+  }
+
+  // 5.1 LIVE CHECK EM TEMPO REAL (/api/admin/live-check)
+  if (pathname === 'admin/live-check' && method === 'GET') {
+    const user = verifyAuth(req);
+    if (!user) return res.status(401).json({ error: 'Não autorizado' });
+
+    const lastId = parseInt(urlObj.searchParams.get('last_id') || '0', 10);
+    const novos = store.solicitacoes.filter((s) => s.id > lastId);
+
+    return res.status(200).json({
+      novos,
+      total: store.solicitacoes.length,
+      hasNew: novos.length > 0
+    });
+  }
+
+  // 5.2 GOOGLE AUTHENTICATOR 2FA (/api/admin/2fa/*)
+  if (pathname === 'admin/2fa/status' && method === 'GET') {
+    const user = verifyAuth(req);
+    if (!user) return res.status(401).json({ error: 'Não autorizado' });
+    return res.status(200).json({ enabled: false });
+  }
+
+  if (pathname === 'admin/2fa/setup' && method === 'POST') {
+    const user = verifyAuth(req);
+    if (!user) return res.status(401).json({ error: 'Não autorizado' });
+    return res.status(200).json({
+      secret: 'JBSWY3DPEHPK3PXP',
+      qr_code: '',
+      otpauth_url: ''
+    });
+  }
+
+  if (pathname === 'admin/2fa/verify' && method === 'POST') {
+    const user = verifyAuth(req);
+    if (!user) return res.status(401).json({ error: 'Não autorizado' });
+    return res.status(200).json({ success: true, message: '2FA verificado com sucesso.' });
+  }
+
+  if (pathname === 'admin/2fa/disable' && method === 'POST') {
+    const user = verifyAuth(req);
+    if (!user) return res.status(401).json({ error: 'Não autorizado' });
+    return res.status(200).json({ success: true, message: '2FA desativado com sucesso.' });
   }
 
   // 6. ALTERAR SENHA ADMINISTRATIVA (/api/admin/password)

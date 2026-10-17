@@ -17,6 +17,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useConfig } from '../../context/ConfigContext';
 import { useLiveUpdates } from '../../context/LiveUpdatesContext';
+import { AdminErrorBoundary } from '../../components/Admin/AdminErrorBoundary';
 
 export const AdminLayout: React.FC = () => {
   const { admin, isAuthenticated, loading, logout } = useAuth();
@@ -218,7 +219,9 @@ export const AdminLayout: React.FC = () => {
 
       {/* Conteúdo Principal */}
       <main className="flex-1 overflow-y-auto min-w-0 max-w-full overflow-x-hidden">
-        <Outlet />
+        <AdminErrorBoundary>
+          <Outlet />
+        </AdminErrorBoundary>
       </main>
     </div>
   );
