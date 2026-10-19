@@ -155,7 +155,7 @@ export const Step1DadosLoja: React.FC<Step1Props> = ({
               onChange={(e) => updateData({ razao_social: e.target.value })}
               onBlur={() => handleBlur('razao_social')}
               placeholder="Ex: Comercial Silva & Filhos LTDA"
-              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
                 touched.razao_social && data.razao_social.trim().length < 3
                   ? 'border-red-500 bg-red-50/30'
                   : 'border-slate-300 focus:border-orange-500'
@@ -178,7 +178,7 @@ export const Step1DadosLoja: React.FC<Step1Props> = ({
             onChange={(e) => updateData({ nome_fantasia: e.target.value })}
             onBlur={() => handleBlur('nome_fantasia')}
             placeholder="Ex: Mercearia do Bairro"
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
               touched.nome_fantasia && data.nome_fantasia.trim().length < 2
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -198,7 +198,7 @@ export const Step1DadosLoja: React.FC<Step1Props> = ({
             value={data.tipo_comercio}
             onChange={(e) => updateData({ tipo_comercio: e.target.value })}
             onBlur={() => handleBlur('tipo_comercio')}
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm bg-white transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm bg-white transition-colors focus:outline-hidden ${
               touched.tipo_comercio && !data.tipo_comercio
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -225,7 +225,7 @@ export const Step1DadosLoja: React.FC<Step1Props> = ({
               onChange={(e) => updateData({ tipo_comercio_outro: e.target.value })}
               onBlur={() => handleBlur('tipo_comercio_outro')}
               placeholder="Ex: Loja de presentes e utilidades"
-              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
                 touched.tipo_comercio_outro && !data.tipo_comercio_outro.trim()
                   ? 'border-red-500 bg-red-50/30'
                   : 'border-slate-300 focus:border-orange-500'

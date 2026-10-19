@@ -43,6 +43,14 @@ export const Home: React.FC = () => {
     config?.subtitulo_hero ||
     'Gere renda extra de R$ 2,50 a R$ 5,00 por pacote entregue, atraia um fluxo diário de novos clientes para o seu comércio e aumente sua visibilidade sem necessidade de estoque.';
 
+  let rawWhatsapp = config?.whatsapp_numero?.replace(/\D/g, '') || '';
+  if (rawWhatsapp.length === 10 || rawWhatsapp.length === 11) {
+    rawWhatsapp = '55' + rawWhatsapp;
+  }
+  const heroWhatsappUrl = rawWhatsapp
+    ? `https://wa.me/${rawWhatsapp}?text=${encodeURIComponent('Olá! Gostaria de tirar dúvidas sobre o cadastramento do meu estabelecimento como ponto de coleta.')}`
+    : '';
+
   const beneficios = config?.beneficios || [
     {
       id: '1',
@@ -222,10 +230,23 @@ export const Home: React.FC = () => {
                   <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>Sem Custos de Adesão</span>
                 </div>
-                <div className="flex items-center gap-2 col-span-2 sm:col-span-1">
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Suporte via WhatsApp</span>
-                </div>
+                {heroWhatsappUrl ? (
+                  <a
+                    href={heroWhatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 col-span-2 sm:col-span-1 text-emerald-700 hover:text-emerald-800 font-semibold transition-colors cursor-pointer"
+                    title="Falar no WhatsApp"
+                  >
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Suporte via WhatsApp</span>
+                  </a>
+                ) : (
+                  <div className="flex items-center gap-2 col-span-2 sm:col-span-1">
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Suporte via WhatsApp</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -699,7 +720,6 @@ export const Home: React.FC = () => {
       </section>
 
       <Footer />
-      <WhatsAppFloatingButton />
     </div>
   );
 };

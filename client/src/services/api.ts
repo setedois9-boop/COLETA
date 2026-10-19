@@ -35,14 +35,19 @@ export function getMediaUrl(pathOrUrl?: string): string {
   return `${pathOrUrl}${tokenParam}`;
 }
 
-export async function changeAdminPassword(senha_atual: string, nova_senha: string): Promise<{ success: boolean; message: string }> {
+export async function changeAdminPassword(senha_atual: string, nova_senha: string, two_factor_code?: string): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${API_BASE}/admin/password`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
       ...authHeaders(),
     },
-    body: JSON.stringify({ senha_atual, nova_senha }),
+    body: JSON.stringify({
+      senha_atual,
+      nova_senha,
+      two_factor_code: two_factor_code ? two_factor_code.replace(/\D/g, '') : undefined,
+      code: two_factor_code ? two_factor_code.replace(/\D/g, '') : undefined,
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -58,19 +63,37 @@ export async function fetchSiteConfig(): Promise<SiteConfig> {
   return res.json();
 }
 
-// 2. Salvar configurações do site (Admin)
-export async function saveSiteConfig(config: Partial<SiteConfig>): Promise<{ success: boolean; message: string }> {
+// 2. Salvar configurações do site (Admin com suporte a 2FA)
+export async function saveSiteConfig(
+  config: Partial<SiteConfig>,
+  twoFactorCode?: string
+): Promise<{ success: boolean; message: string }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...authHeaders(),
+  };
+
+  if (twoFactorCode) {
+    headers['x-2fa-code'] = twoFactorCode.trim();
+  }
+
+  const payload: any = { ...config };
+  if (twoFactorCode) {
+    payload.two_factor_code = twoFactorCode.trim();
+  }
+
   const res = await fetch(`${API_BASE}/config`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-    },
-    body: JSON.stringify(config),
+    headers,
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Falha ao salvar configurações');
+    const error: any = new Error(err.error || 'Falha ao salvar configurações');
+    error.require_2fa = Boolean(err.require_2fa);
+    error.require_2fa_setup = Boolean(err.require_2fa_setup);
+    error.locked = Boolean(err.locked);
+    throw error;
   }
   return res.json();
 }
@@ -450,6 +473,18 @@ export async function setup2FA(): Promise<{
   return res.json();
 }
 
+export async function directEnable2FA(): Promise<{ success: boolean; message: string; secret?: string }> {
+  const res = await fetch(`${API_BASE}/admin/2fa/direct-enable`, {
+    method: 'POST',
+    headers: { ...authHeaders() },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Erro ao ativar 2FA diretamente');
+  }
+  return res.json();
+}
+
 export async function verifyAndEnable2FA(token: string): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${API_BASE}/admin/2fa/verify-and-enable`, {
     method: 'POST',
@@ -461,19 +496,23 @@ export async function verifyAndEnable2FA(token: string): Promise<{ success: bool
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'Código do Google Authenticator inválido');
+    throw new Error(err.error || 'Código do Google Authenticator inválido ou expirado');
   }
   return res.json();
 }
 
-export async function disable2FA(senha: string): Promise<{ success: boolean; message: string }> {
+export async function disable2FA(senha: string, code: string): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${API_BASE}/admin/2fa/disable`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...authHeaders(),
     },
-    body: JSON.stringify({ senha }),
+    body: JSON.stringify({
+      senha: senha || '',
+      code: code ? code.replace(/\D/g, '') : '',
+      two_factor_code: code ? code.replace(/\D/g, '') : '',
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

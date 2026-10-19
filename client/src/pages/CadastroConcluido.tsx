@@ -61,7 +61,10 @@ export const CadastroConcluido: React.FC = () => {
   };
 
   // Montar link do WhatsApp com dados dinâmicos configurados no painel
-  const rawNumber = config?.whatsapp_numero?.replace(/\D/g, '') || '';
+  let rawNumber = config?.whatsapp_numero?.replace(/\D/g, '') || '';
+  if (rawNumber.length === 10 || rawNumber.length === 11) {
+    rawNumber = '55' + rawNumber;
+  }
   const templateMsg =
     config?.whatsapp_mensagem ||
     'Olá! Acabei de enviar uma solicitação para cadastrar meu estabelecimento como ponto de coleta.\n\nProtocolo: [PROTOCOLO]\nEstabelecimento: [NOME FANTASIA]\n\nGostaria de receber orientações sobre as próximas etapas.';

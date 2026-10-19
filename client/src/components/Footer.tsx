@@ -1,11 +1,29 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Package, ShieldAlert, FileText, Lock } from 'lucide-react';
+import { Package, ShieldAlert, FileText, Lock, MessageCircle } from 'lucide-react';
 import { useConfig } from '../context/ConfigContext';
 
 export const Footer: React.FC = () => {
   const { config } = useConfig();
   const ano = new Date().getFullYear();
+
+  let rawNumber = config?.whatsapp_numero?.replace(/\D/g, '') || '';
+  if (rawNumber.length === 10 || rawNumber.length === 11) {
+    rawNumber = '55' + rawNumber;
+  }
+  const whatsappUrl = rawNumber
+    ? `https://wa.me/${rawNumber}?text=${encodeURIComponent('Olá! Gostaria de tirar dúvidas com o atendimento sobre o cadastro de ponto de coleta.')}`
+    : '';
+
+  const formatWhatsapp = (num: string) => {
+    if (num.length === 13) {
+      return `+${num.slice(0, 2)} (${num.slice(2, 4)}) ${num.slice(4, 9)}-${num.slice(9)}`;
+    }
+    if (num.length === 12) {
+      return `+${num.slice(0, 2)} (${num.slice(2, 4)}) ${num.slice(4, 8)}-${num.slice(8)}`;
+    }
+    return `+${num}`;
+  };
 
   return (
     <footer className="bg-slate-900 text-slate-400 text-sm mt-20 border-t border-slate-800">
@@ -44,6 +62,20 @@ export const Footer: React.FC = () => {
             <p className="text-slate-400 text-sm max-w-md leading-relaxed">
               Conectando lojistas e estabelecimentos comerciais às melhores oportunidades de operação logística e pontos de recebimento de encomendas.
             </p>
+
+            {whatsappUrl && (
+              <div className="pt-2">
+                <a
+                  href={whatsappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2.5 px-4 py-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer group"
+                >
+                  <MessageCircle className="w-4 h-4 fill-emerald-400 text-emerald-400" />
+                  <span>Atendimento WhatsApp: {formatWhatsapp(rawNumber)}</span>
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Coluna 2: Navegação */}
@@ -72,6 +104,19 @@ export const Footer: React.FC = () => {
           <div>
             <h5 className="font-bold text-white mb-4 text-xs uppercase tracking-wider">Segurança & Gestão</h5>
             <ul className="space-y-2 text-sm">
+              {whatsappUrl && (
+                <li>
+                  <a
+                    href={whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-white transition-colors flex items-center gap-2 text-xs text-emerald-400 font-semibold"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 fill-emerald-400" />
+                    <span>WhatsApp de Suporte</span>
+                  </a>
+                </li>
+              )}
               <li className="flex items-center gap-2">
                 <FileText className="w-4 h-4 text-slate-500" />
                 <span>Política de Privacidade</span>

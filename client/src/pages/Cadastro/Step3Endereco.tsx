@@ -148,7 +148,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             value={data.estado}
             onChange={(e) => updateData({ estado: e.target.value })}
             onBlur={() => handleBlur('estado')}
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm bg-white transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm bg-white transition-colors focus:outline-hidden ${
               touched.estado && !data.estado
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -174,7 +174,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             onChange={(e) => updateData({ cidade: e.target.value })}
             onBlur={() => handleBlur('cidade')}
             placeholder="Ex: São Paulo"
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
               touched.cidade && !data.cidade.trim()
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -193,7 +193,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             onChange={(e) => updateData({ bairro: e.target.value })}
             onBlur={() => handleBlur('bairro')}
             placeholder="Ex: Centro / Vila Mariana"
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
               touched.bairro && !data.bairro.trim()
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -212,7 +212,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             onChange={(e) => updateData({ rua: e.target.value })}
             onBlur={() => handleBlur('rua')}
             placeholder="Ex: Rua das Flores"
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
               touched.rua && !data.rua.trim()
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -231,7 +231,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             onChange={(e) => updateData({ numero: e.target.value })}
             onBlur={() => handleBlur('numero')}
             placeholder="Ex: 120 ou S/N"
-            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+            className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
               touched.numero && !data.numero.trim()
                 ? 'border-red-500 bg-red-50/30'
                 : 'border-slate-300 focus:border-orange-500'
@@ -249,7 +249,7 @@ export const Step3Endereco: React.FC<Step3Props> = ({
             value={data.complemento}
             onChange={(e) => updateData({ complemento: e.target.value })}
             placeholder="Ex: Sala 2, Loja B, Ao lado da farmácia"
-            className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:border-orange-500 text-slate-900 text-sm transition-colors focus:outline-hidden"
+            className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:border-orange-500 text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden"
           />
         </div>
       </div>

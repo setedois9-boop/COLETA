@@ -147,7 +147,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
               onChange={(e) => updateData({ nome_responsavel: e.target.value })}
               onBlur={() => handleBlur('nome_responsavel')}
               placeholder="Ex: Carlos Eduardo de Oliveira"
-              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+              className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
                 touched.nome_responsavel && data.nome_responsavel.trim().length < 3
                   ? 'border-red-500 bg-red-50/30'
                   : 'border-slate-300 focus:border-orange-500'
@@ -168,7 +168,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 onBlur={() => handleBlur('telefone')}
                 placeholder="(11) 98765-4321"
                 maxLength={15}
-                className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm font-mono transition-colors focus:outline-hidden ${
+                className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm font-mono transition-colors focus:outline-hidden ${
                   touched.telefone && data.telefone.replace(/\D/g, '').length < 10
                     ? 'border-red-500 bg-red-50/30'
                     : 'border-slate-300 focus:border-orange-500'
@@ -190,7 +190,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 onChange={(e) => updateData({ email: e.target.value })}
                 onBlur={() => handleBlur('email')}
                 placeholder="contato@sualoja.com.br"
-                className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-sm transition-colors focus:outline-hidden ${
+                className={`w-full px-4 py-3 rounded-xl border text-slate-900 text-base sm:text-sm transition-colors focus:outline-hidden ${
                   touched.email && !validarEmail(data.email)
                     ? 'border-red-500 bg-red-50/30'
                     : 'border-slate-300 focus:border-orange-500'
@@ -258,7 +258,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
               <select
                 value={data.banco_1}
                 onChange={(e) => updateData({ banco_1: e.target.value })}
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs bg-white focus:outline-hidden focus:border-orange-500 font-medium"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs bg-white focus:outline-hidden focus:border-orange-500 font-medium"
               >
                 <option value="">Selecione o 1º banco</option>
                 {bancosPrincipais.map((b) => (
@@ -276,7 +276,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.agencia_1}
                 onChange={(e) => updateData({ agencia_1: e.target.value })}
                 placeholder="Ex: 0001"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
 
@@ -289,7 +289,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.conta_1}
                 onChange={(e) => updateData({ conta_1: e.target.value })}
                 placeholder="Ex: 12345-6"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
 
@@ -300,7 +300,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
               <select
                 value={data.tipo_conta_1}
                 onChange={(e) => updateData({ tipo_conta_1: e.target.value })}
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs bg-white focus:outline-hidden focus:border-orange-500"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs bg-white focus:outline-hidden focus:border-orange-500"
               >
                 <option value="Corrente Pessoa Jurídica">Conta Corrente (Pessoa Jurídica - CNPJ)</option>
                 <option value="Corrente Pessoa Física">Conta Corrente (Pessoa Física)</option>
@@ -318,7 +318,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.pix_1}
                 onChange={(e) => updateData({ pix_1: e.target.value })}
                 placeholder="CNPJ, E-mail, Celular ou Chave Aleatória"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
           </div>
@@ -344,7 +344,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
               <select
                 value={data.banco_2}
                 onChange={(e) => updateData({ banco_2: e.target.value })}
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs bg-white focus:outline-hidden focus:border-orange-500 font-medium"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs bg-white focus:outline-hidden focus:border-orange-500 font-medium"
               >
                 <option value="">Selecione o 2º banco</option>
                 {bancosPrincipais.map((b) => (
@@ -362,7 +362,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.agencia_2}
                 onChange={(e) => updateData({ agencia_2: e.target.value })}
                 placeholder="Ex: 0001"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
 
@@ -375,7 +375,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.conta_2}
                 onChange={(e) => updateData({ conta_2: e.target.value })}
                 placeholder="Ex: 54321-0"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
 
@@ -386,7 +386,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
               <select
                 value={data.tipo_conta_2 || 'Corrente Pessoa Jurídica'}
                 onChange={(e) => updateData({ tipo_conta_2: e.target.value })}
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs bg-white focus:outline-hidden focus:border-orange-500"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs bg-white focus:outline-hidden focus:border-orange-500"
               >
                 <option value="Corrente Pessoa Jurídica">Conta Corrente (Pessoa Jurídica - CNPJ)</option>
                 <option value="Corrente Pessoa Física">Conta Corrente (Pessoa Física)</option>
@@ -404,7 +404,7 @@ export const Step7ContatoFinanceiro: React.FC<Step7Props> = ({
                 value={data.pix_2}
                 onChange={(e) => updateData({ pix_2: e.target.value })}
                 placeholder="Chave Pix alternativa (E-mail, celular, aleatória)"
-                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-xs focus:outline-hidden focus:border-orange-500 font-mono"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-slate-800 text-base sm:text-xs focus:outline-hidden focus:border-orange-500 font-mono"
               />
             </div>
           </div>

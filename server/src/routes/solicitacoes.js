@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { validarCNPJ } from '../utils/cnpjValidator.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -400,8 +400,11 @@ router.get('/:id', authenticateToken, (req, res) => {
       historico
     };
 
-    // Mascarar dados bancários por padrão para segurança, a menos que explicitamente solicitado pelo admin
-    if (reveal_financial !== 'true') {
+    // Mascarar dados bancários por padrão para segurança, a menos que explicitamente solicitado por administrador autorizado
+    const allowedAdminRoles = ['admin', 'superadmin', 'master', 'administrador'];
+    const hasFinancialAccess = req.user && allowedAdminRoles.includes((req.user.permissao || '').toLowerCase());
+
+    if (reveal_financial !== 'true' || !hasFinancialAccess) {
       if (resposta.pix_1) resposta.pix_1 = resposta.pix_1.slice(0, 3) + '••••' + resposta.pix_1.slice(-3);
       if (resposta.conta_1) resposta.conta_1 = '••••-' + resposta.conta_1.slice(-2);
       if (resposta.pix_2) resposta.pix_2 = resposta.pix_2.slice(0, 3) + '••••' + resposta.pix_2.slice(-3);
@@ -416,7 +419,7 @@ router.get('/:id', authenticateToken, (req, res) => {
 });
 
 // PATCH /api/solicitacoes/:id/status - Atualização de status com registro de auditoria
-router.patch('/:id/status', authenticateToken, (req, res) => {
+router.patch('/:id/status', authenticateToken, requireRole(['admin', 'superadmin', 'master', 'administrador']), (req, res) => {
   try {
     const { id } = req.params;
     const { status, observacao } = req.body;
@@ -479,7 +482,7 @@ router.patch('/:id/status', authenticateToken, (req, res) => {
 });
 
 // POST /api/solicitacoes/:id/observacoes - Atualizar anotação interna
-router.post('/:id/observacoes', authenticateToken, (req, res) => {
+router.post('/:id/observacoes', authenticateToken, requireRole(['admin', 'superadmin', 'master', 'administrador']), (req, res) => {
   try {
     const { id } = req.params;
     const { observacoes_internas } = req.body;
@@ -498,10 +501,14 @@ router.post('/:id/observacoes', authenticateToken, (req, res) => {
   }
 });
 
-// DELETE /api/solicitacoes/:id - Exclusão por LGPD / Privacidade
-router.delete('/:id', authenticateToken, (req, res) => {
+// DELETE /api/solicitacoes/:id - Exclusão por LGPD / Privacidade (requer perfil administrador)
+router.delete('/:id', authenticateToken, requireRole(['admin', 'superadmin', 'master', 'administrador']), (req, res) => {
   try {
     const { id } = req.params;
+    const existing = db.prepare('SELECT id FROM solicitacoes WHERE id = ?').get(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Solicitação não encontrada para exclusão.' });
+    }
     db.prepare('DELETE FROM solicitacoes WHERE id = ?').run(id);
     res.json({ success: true, message: 'Registro excluído em conformidade com as diretrizes de privacidade.' });
   } catch (error) {

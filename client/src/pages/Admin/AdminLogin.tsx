@@ -126,7 +126,7 @@ export const AdminLogin: React.FC = () => {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="admin@pontodecoleta.com.br"
-                    className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-hidden focus:border-orange-500 transition-colors"
+                    className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 text-base sm:text-sm focus:outline-hidden focus:border-orange-500 transition-colors"
                   />
                   <Mail className="w-4 h-4 text-slate-500 absolute right-3.5 top-3.5" />
                 </div>
@@ -143,7 +143,7 @@ export const AdminLogin: React.FC = () => {
                     value={senha}
                     onChange={(e) => setSenha(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full px-4 py-3 pr-10 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-hidden focus:border-orange-500 transition-colors"
+                    className="w-full px-4 py-3 pr-10 rounded-xl bg-slate-900/80 border border-slate-700 text-white placeholder-slate-500 text-base sm:text-sm focus:outline-hidden focus:border-orange-500 transition-colors"
                   />
                   <button
                     type="button"

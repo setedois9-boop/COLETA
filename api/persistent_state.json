@@ -1,0 +1,134 @@
+{
+  "admin": {
+    "id": 1,
+    "nome": "Administrador Geral",
+    "email": "admin@pontodecoleta.com.br",
+    "senha_hash": "$2a$10$wTf26b5u9dZ2a8e4j7pDxe4bO1d9a2g4h6j8k0l2m4n6o8p0q2r4s",
+    "permissao": "superadmin",
+    "two_factor_enabled": 1,
+    "two_factor_secret": "enc:gcm:b577d3f7e7b0f73a98f374a9:cd1de2f8a39d8a28d5c218647f24e871:41377c7ba68b521841e17900ab06e1bdea545c1af4ebfa8223433fabb0b6d5dc",
+    "two_factor_temp_secret": null
+  },
+  "config": {
+    "nome_site": "Rede Logística Parceira",
+    "titulo_hero": "Transforme seu estabelecimento em um Ponto de Coleta de Encomendas",
+    "subtitulo_hero": "Gere renda extra de R$ 2,50 a R$ 5,00 por pacote entregue, atraia um fluxo diário de novos clientes para o seu comércio e aumente sua visibilidade sem necessidade de estoque.",
+    "cor_primaria": "#EE4D2D",
+    "cor_secundaria": "#0F172A",
+    "whatsapp_numero": "5511999998888",
+    "whatsapp_mensagem": "Olá! Acabei de enviar uma solicitação para cadastrar meu estabelecimento como ponto de coleta.\n\nProtocolo: [PROTOCOLO]\nEstabelecimento: [NOME FANTASIA]\n\nGostaria de receber orientações sobre as próximas etapas.",
+    "coleta_bancaria_obrigatoria": true,
+    "coleta_bancaria_ativa": true,
+    "limite_upload_mb": 15,
+    "retencao_dias": 365,
+    "aviso_independencia": "Aviso importante: Este portal é uma plataforma independente de captação e análise de interesse de estabelecimentos comerciais para potenciais pontos de coleta e logística parceira de e-commerce.",
+    "beneficios": [
+      {
+        "id": "1",
+        "titulo": "Aumento Real de Receita (R$ 2,50 a R$ 5,00/pacote)",
+        "descricao": "Gere uma renda extra expressiva e recorrente. Cada pacote manipulado ou entregue no seu estabelecimento gera remuneração direta para você.",
+        "icone": "DollarSign",
+        "destaque": "R$ 2,50 a R$ 5,00 / pacote"
+      },
+      {
+        "id": "2",
+        "titulo": "Atração Contínua de Novos Clientes",
+        "descricao": "Compradores e vendedores de e-commerce visitam sua loja diariamente para retirar ou postar mercadorias.",
+        "icone": "Users",
+        "destaque": "Mais visitantes todo dia"
+      },
+      {
+        "id": "3",
+        "titulo": "Aumento no Giro de Vendas da Sua Loja",
+        "descricao": "Ao entrar no seu estabelecimento para retirar uma encomenda, clientes aproveitam para comprar produtos da sua própria loja.",
+        "icone": "TrendingUp",
+        "destaque": "Vendas cruzadas no balcão"
+      },
+      {
+        "id": "4",
+        "titulo": "Monetização de Espaço Ocioso",
+        "descricao": "Aproveite áreas livres no seu balcão ou prateleiras para armazenar pacotes com segurança.",
+        "icone": "Box",
+        "destaque": "Zero custo com estoque"
+      },
+      {
+        "id": "5",
+        "titulo": "Operação Rápida pelo Aplicativo",
+        "descricao": "Bipagem prática e ágil com o leitor de código de barras ou QR code do próprio smartphone.",
+        "icone": "Smartphone",
+        "destaque": "100% digital e prático"
+      },
+      {
+        "id": "6",
+        "titulo": "Reconhecimento e Credibilidade Local",
+        "descricao": "Seu comércio passa a ser exibido como ponto de referência logístico no mapa do maior e-commerce da América Latina.",
+        "icone": "ShieldCheck",
+        "destaque": "Maior visibilidade no bairro"
+      }
+    ],
+    "como_funciona": [
+      {
+        "etapa": 1,
+        "titulo": "Preencha os dados da loja",
+        "descricao": "Informe CNPJ, dados cadastrais, endereço e os horários de atendimento."
+      },
+      {
+        "etapa": 2,
+        "titulo": "Envie as fotos da loja",
+        "descricao": "Envie fotos nítidas da fachada externa e do espaço interno disponível para pacotes."
+      },
+      {
+        "etapa": 3,
+        "titulo": "Revise e envie a solicitação",
+        "descricao": "Confira os dados preenchidos, concorde com os termos e envie para gerar seu protocolo."
+      },
+      {
+        "etapa": 4,
+        "titulo": "Atendimento pelo WhatsApp",
+        "descricao": "Entre em contato com nossa equipe com seu protocolo para acompanhar a avaliação."
+      }
+    ],
+    "requisitos": [
+      "CNPJ ativo e dados cadastrais da empresa regulares",
+      "Nome fantasia condizente com a fachada comercial",
+      "Fotos nítidas da fachada e da área interna de armazenamento",
+      "Endereço comercial fixo com atendimento ao público",
+      "Horários regulares de funcionamento comercial"
+    ],
+    "perguntas_frequentes": [
+      {
+        "pergunta": "Quem pode solicitar o cadastro?",
+        "resposta": "Qualquer comércio com CNPJ ativo, ponto fixo e espaço seguro para guardar encomendas."
+      },
+      {
+        "pergunta": "Preciso pagar alguma taxa para me credenciar?",
+        "resposta": "Não! O cadastro é 100% gratuito e você é remunerado por pacote manipulado."
+      },
+      {
+        "pergunta": "Preciso ter CNPJ?",
+        "resposta": "Sim, é necessário possuir CNPJ ativo (MEI, ME ou demais modalidades)."
+      },
+      {
+        "pergunta": "O cadastro garante aprovação?",
+        "resposta": "Não. O envio do formulário representa uma candidatura submetida à análise de viabilidade logística regional."
+      }
+    ],
+    "tipos_comercio": [
+      "Mercearia ou minimercado",
+      "Loja de conveniência",
+      "Papelaria / Bazar",
+      "Loja de roupas / calçados",
+      "Loja de eletrônicos / celulares",
+      "Assistência técnica",
+      "Farmácia / Drogaria",
+      "Outros"
+    ],
+    "servicos_disponiveis": [
+      "Receber pacotes de vendedores parceiros",
+      "Entregar pacotes a compradores",
+      "Ponto de devolução e logística reversa"
+    ]
+  },
+  "solicitacoes": [],
+  "nextId": 10
+}

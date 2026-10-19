@@ -177,7 +177,7 @@ export const Step5Horarios: React.FC<Step5Props> = ({
                         type="time"
                         value={horario.abertura}
                         onChange={(e) => handleHorarioChange(key, 'abertura', e.target.value)}
-                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 font-mono text-xs focus:outline-hidden focus:border-orange-500"
+                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 font-mono text-base sm:text-xs focus:outline-hidden focus:border-orange-500"
                       />
                     </div>
                     <div>
@@ -186,7 +186,7 @@ export const Step5Horarios: React.FC<Step5Props> = ({
                         type="time"
                         value={horario.fechamento}
                         onChange={(e) => handleHorarioChange(key, 'fechamento', e.target.value)}
-                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 font-mono text-xs focus:outline-hidden focus:border-orange-500"
+                        className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-slate-800 font-mono text-base sm:text-xs focus:outline-hidden focus:border-orange-500"
                       />
                     </div>
                   </div>
@@ -237,7 +237,7 @@ export const Step5Horarios: React.FC<Step5Props> = ({
                 type="time"
                 value={data.horario_almoco_inicio || '12:00'}
                 onChange={(e) => updateData({ horario_almoco_inicio: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-800 font-mono text-sm focus:outline-hidden focus:border-orange-500"
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-800 font-mono text-base sm:text-sm focus:outline-hidden focus:border-orange-500"
               />
             </div>
             <div>
@@ -248,7 +248,7 @@ export const Step5Horarios: React.FC<Step5Props> = ({
                 type="time"
                 value={data.horario_almoco_fim || '13:00'}
                 onChange={(e) => updateData({ horario_almoco_fim: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-800 font-mono text-sm focus:outline-hidden focus:border-orange-500"
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-slate-800 font-mono text-base sm:text-sm focus:outline-hidden focus:border-orange-500"
               />
             </div>
           </div>

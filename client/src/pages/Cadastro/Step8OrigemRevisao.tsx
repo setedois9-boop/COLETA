@@ -127,7 +127,7 @@ export const Step8OrigemRevisao: React.FC<Step8Props> = ({
               value={data.origem_outro}
               onChange={(e) => updateData({ origem_outro: e.target.value })}
               placeholder="Ex: Grupo de comerciantes locais no WhatsApp"
-              className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 text-sm focus:outline-hidden focus:border-orange-500"
+              className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 text-base sm:text-sm focus:outline-hidden focus:border-orange-500"
             />
           </div>
         )}

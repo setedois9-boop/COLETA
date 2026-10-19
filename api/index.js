@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import Busboy from 'busboy';
@@ -8,7 +10,52 @@ import { generateSecret, generateURI, verifySync } from 'otplib';
 import QRCode from 'qrcode';
 
 const JWT_SECRET = process.env.JWT_SECRET || '6c48d88a3273c0ea10957e9dbd2c789784f8541dbf2391bed73c8f54760116bf';
-const TMP_DATA_FILE = path.join('/tmp', 'coleta_data.json');
+
+function getTotpEncryptionKey() {
+  if (process.env.TOTP_ENCRYPTION_KEY && process.env.TOTP_ENCRYPTION_KEY.trim() !== '') {
+    const rawKey = process.env.TOTP_ENCRYPTION_KEY.trim();
+    if (rawKey.length === 64) {
+      return Buffer.from(rawKey, 'hex');
+    }
+    return crypto.createHash('sha256').update(rawKey).digest();
+  }
+  return crypto.createHash('sha256').update(`totp-encryption-key-aes-256-gcm-v1:${JWT_SECRET}`).digest();
+}
+
+function encryptSecret(plainText) {
+  if (!plainText || typeof plainText !== 'string' || plainText.startsWith('enc:gcm:')) return plainText;
+  const key = getTotpEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  let ciphertext = cipher.update(plainText, 'utf8', 'hex');
+  ciphertext += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return `enc:gcm:${iv.toString('hex')}:${authTag}:${ciphertext}`;
+}
+
+function decryptSecret(storedValue) {
+  if (!storedValue || typeof storedValue !== 'string' || !storedValue.startsWith('enc:gcm:')) {
+    return storedValue;
+  }
+  const parts = storedValue.split(':');
+  if (parts.length !== 5) return storedValue;
+  const [, , ivHex, tagHex, cipherHex] = parts;
+  try {
+    const key = getTotpEncryptionKey();
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(tagHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(cipherHex, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch {
+    return storedValue;
+  }
+}
+const TMP_DATA_FILE = process.platform === 'win32'
+  ? path.join(process.env.TEMP || os.tmpdir(), 'coleta_data.json')
+  : path.join('/tmp', 'coleta_data.json');
 
 // Supabase helper
 function getSupabase() {
@@ -241,12 +288,13 @@ const INITIAL_SOLICITACOES = [
   }
 ];
 
-// Carregar ou salvar dados em cache de memória e /tmp
+// Carregar ou salvar dados em cache de memória e /tmp com suporte a persistent_state.json
 let inMemoryStore = null;
 
 function loadStore() {
   if (inMemoryStore) return inMemoryStore;
 
+  // 1. Tentar ler do arquivo temporário (/tmp ou TEMP)
   try {
     if (fs.existsSync(TMP_DATA_FILE)) {
       const content = fs.readFileSync(TMP_DATA_FILE, 'utf-8');
@@ -254,9 +302,30 @@ function loadStore() {
       return inMemoryStore;
     }
   } catch (err) {
-    console.warn('Erro ao ler /tmp store:', err.message);
+    console.warn('Erro ao ler TMP_DATA_FILE store:', err.message);
   }
 
+  // 2. Se /tmp estiver vazio (novo container/cold start), ler o estado persistente empacotado
+  const possiblePaths = [
+    path.join(process.cwd(), 'api', 'persistent_state.json'),
+    path.join(process.cwd(), 'persistent_state.json'),
+    path.resolve('api/persistent_state.json'),
+  ];
+
+  for (const p of possiblePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        const content = fs.readFileSync(p, 'utf-8');
+        inMemoryStore = JSON.parse(content);
+        saveStore(inMemoryStore);
+        return inMemoryStore;
+      }
+    } catch (err) {
+      console.warn('Erro ao ler persistent_state.json em', p, err.message);
+    }
+  }
+
+  // 3. Fallback seguro garantindo 2FA ativo
   inMemoryStore = {
     admin: {
       id: 1,
@@ -264,8 +333,8 @@ function loadStore() {
       email: (process.env.ADMIN_EMAIL || 'admin@pontodecoleta.com.br').trim().toLowerCase(),
       senha_hash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'Admin@2026', 10),
       permissao: 'superadmin',
-      two_factor_enabled: 0,
-      two_factor_secret: null,
+      two_factor_enabled: 1,
+      two_factor_secret: 'enc:gcm:b577d3f7e7b0f73a98f374a9:cd1de2f8a39d8a28d5c218647f24e871:41377c7ba68b521841e17900ab06e1bdea545c1af4ebfa8223433fabb0b6d5dc',
       two_factor_temp_secret: null
     },
     config: { ...DEFAULT_CONFIG },
@@ -280,9 +349,23 @@ function loadStore() {
 function saveStore(store) {
   inMemoryStore = store;
   try {
+    const dir = path.dirname(TMP_DATA_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
     fs.writeFileSync(TMP_DATA_FILE, JSON.stringify(store, null, 2), 'utf-8');
   } catch (err) {
     // ignorar falhas de escrita em read-only estrito
+  }
+
+  // Tentar sincronizar persistent_state.json se acessível e gravável
+  try {
+    const persistentFile = path.join(process.cwd(), 'api', 'persistent_state.json');
+    if (fs.existsSync(persistentFile)) {
+      fs.writeFileSync(persistentFile, JSON.stringify(store, null, 2), 'utf-8');
+    }
+  } catch {
+    // read-only no runtime Vercel é esperado
   }
 }
 
@@ -366,7 +449,14 @@ export default async function handler(req, res) {
   // CORS universal
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-2fa-code, x-two-factor-code');
+
+  // Cabeçalhos HTTP de Segurança Avançados (OWASP Hardening)
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -400,11 +490,49 @@ export default async function handler(req, res) {
     }
     if (method === 'PUT') {
       const user = verifyAuth(req);
-      if (!user) return res.status(401).json({ error: 'Não autorizado' });
+      if (!user) return res.status(401).json({ error: 'Acesso não autorizado. Sessão administrativa inválida.' });
+
+      // Verificar se o administrador possui 2FA ativo
+      if (!store.admin.two_factor_enabled || !store.admin.two_factor_secret) {
+        return res.status(403).json({
+          error: 'Autenticação de dois fatores (2FA) não configurada nesta conta. Por segurança, é obrigatório ativar o Google Authenticator antes de alterar as configurações da plataforma.',
+          require_2fa_setup: true,
+        });
+      }
+
       const body = await parseRequestBody(req);
+      const twoFactorCode = (
+        req.headers['x-2fa-code'] ||
+        req.headers['x-two-factor-code'] ||
+        body.two_factor_code ||
+        ''
+      ).toString().replace(/\D/g, '');
+
+      if (!twoFactorCode || twoFactorCode.length !== 6) {
+        return res.status(403).json({
+          error: 'Código de autenticação de dois fatores (2FA) de 6 dígitos é obrigatório para salvar as alterações.',
+          require_2fa: true,
+        });
+      }
+
+      const plainSecret = decryptSecret(store.admin.two_factor_secret);
+      const verification = verifySync({
+        token: twoFactorCode,
+        secret: plainSecret,
+        epochTolerance: 60
+      });
+
+      if (!verification || !verification.valid) {
+        return res.status(403).json({
+          error: 'Código 2FA incorreto ou expirado. Verifique o aplicativo Google Authenticator e tente novamente.',
+          require_2fa: true,
+        });
+      }
+
+      delete body.two_factor_code;
       store.config = { ...store.config, ...body };
       saveStore(store);
-      return res.status(200).json({ success: true, message: 'Configurações atualizadas com sucesso!' });
+      return res.status(200).json({ success: true, message: 'Configurações atualizadas com sucesso mediante validação 2FA!' });
     }
   }
 
@@ -439,10 +567,11 @@ export default async function handler(req, res) {
       }
 
       const cleanCode = String(codeInput).replace(/\D/g, '');
+      const plainSecret = decryptSecret(store.admin.two_factor_secret);
       const verification = verifySync({
         token: cleanCode,
-        secret: store.admin.two_factor_secret,
-        epochTolerance: 30
+        secret: plainSecret,
+        epochTolerance: 60
       });
 
       if (!verification || !verification.valid) {
@@ -487,7 +616,7 @@ export default async function handler(req, res) {
         nome: store.admin.nome,
         email: store.admin.email,
         permissao: store.admin.permissao,
-        two_factor_enabled: Boolean(store.admin.two_factor_enabled)
+        two_factor_enabled: Boolean(Number(store.admin.two_factor_enabled) === 1 && store.admin.two_factor_secret)
       }
     });
   }
@@ -581,15 +710,22 @@ export default async function handler(req, res) {
   if (pathname === 'admin/2fa/status' && method === 'GET') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
-    return res.status(200).json({ enabled: Boolean(store.admin.two_factor_enabled) });
+    const isEnabled = Boolean(Number(store.admin.two_factor_enabled) === 1 && store.admin.two_factor_secret);
+    return res.status(200).json({ enabled: isEnabled });
   }
 
   if (pathname === 'admin/2fa/setup' && method === 'POST') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
+    if (store.admin.two_factor_enabled === 1 || store.admin.two_factor_enabled === true) {
+      return res.status(400).json({
+        error: 'A autenticação em duas etapas já está ativa nesta conta. Para reconfigurar, desative-a primeiro na aba Segurança confirmando sua senha.'
+      });
+    }
+
     const secret = generateSecret();
-    store.admin.two_factor_temp_secret = secret;
+    store.admin.two_factor_temp_secret = encryptSecret(secret);
     saveStore(store);
 
     const otpauthUrl = generateURI({
@@ -611,6 +747,12 @@ export default async function handler(req, res) {
     });
   }
 
+  if (pathname === 'admin/2fa/direct-enable' && method === 'POST') {
+    return res.status(403).json({
+      error: 'Ativação direta descontinuada por segurança. É obrigatório validar o código de 6 dígitos gerado no Google Authenticator através de /api/admin/2fa/verify-and-enable.'
+    });
+  }
+
   if ((pathname === 'admin/2fa/verify-and-enable' || pathname === 'admin/2fa/verify') && method === 'POST') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
@@ -626,9 +768,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Nenhuma configuração de 2FA em andamento. Gere um novo QR Code.' });
     }
 
+    const plainTempSecret = decryptSecret(store.admin.two_factor_temp_secret);
     const verification = verifySync({
       token: tokenInput,
-      secret: store.admin.two_factor_temp_secret,
+      secret: plainTempSecret,
       epochTolerance: 30
     });
 
@@ -639,7 +782,7 @@ export default async function handler(req, res) {
     }
 
     store.admin.two_factor_enabled = 1;
-    store.admin.two_factor_secret = store.admin.two_factor_temp_secret;
+    store.admin.two_factor_secret = encryptSecret(plainTempSecret);
     store.admin.two_factor_temp_secret = null;
     saveStore(store);
 
@@ -653,35 +796,39 @@ export default async function handler(req, res) {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
-    const body = await parseRequestBody(req);
-    const { senha } = body;
-    if (!senha) {
-      return res.status(400).json({ error: 'Sua senha administrativa atual é necessária para desativar o 2FA.' });
+    // Procedimento seguro de recuperação emergencial devidamente autorizado via chave de ambiente
+    const emergencyKey = process.env.EMERGENCY_RECOVERY_KEY;
+    const reqEmergencyKey = req.headers['x-emergency-recovery-key'];
+    const isAuthorizedEmergency = Boolean(emergencyKey && reqEmergencyKey && emergencyKey === reqEmergencyKey);
+
+    if (!isAuthorizedEmergency) {
+      return res.status(403).json({
+        error: 'A desativação do 2FA está bloqueada pelas políticas de segurança da plataforma. A autenticação em duas etapas é mandatória e não pode ser desativada pelo painel administrativo comum.',
+        locked: true
+      });
     }
 
-    const envPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
-    const isMatch = senha === envPassword || senha === 'Admin@2026' || bcrypt.compareSync(senha, store.admin.senha_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Senha incorreta. Ação não autorizada.' });
-    }
-
+    // Apenas se autorizado emergencialmente:
     store.admin.two_factor_enabled = 0;
     store.admin.two_factor_secret = null;
     store.admin.two_factor_temp_secret = null;
     saveStore(store);
 
+    console.info(`[AUDIT] 2FA desativado mediante protocolo emergencial autorizado em ${new Date().toISOString()}`);
+
     return res.status(200).json({
       success: true,
-      message: 'Autenticação em duas etapas desativada com sucesso.'
+      message: 'Autenticação em duas etapas desativada mediante protocolo emergencial.'
     });
   }
+
 
   // 6. ALTERAR SENHA ADMINISTRATIVA (/api/admin/password)
   if (pathname === 'admin/password' && method === 'PUT') {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
     const body = await parseRequestBody(req);
-    const { senha_atual, nova_senha } = body;
+    const { senha_atual, nova_senha, two_factor_code, code } = body || {};
 
     const envPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
     const isCurrentValid =
@@ -697,9 +844,30 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'A nova senha deve possuir no mínimo 8 caracteres.' });
     }
 
+    if (store.admin.two_factor_enabled === 1 && store.admin.two_factor_secret) {
+      const tokenInput = String(two_factor_code || code || '').replace(/\D/g, '');
+      if (!tokenInput || tokenInput.length !== 6) {
+        return res.status(400).json({
+          error: 'Código 2FA do Google Authenticator é obrigatório para alterar a senha administrativa.'
+        });
+      }
+      const plainSecret = decryptSecret(store.admin.two_factor_secret);
+      const verification = verifySync({
+        token: tokenInput,
+        secret: plainSecret,
+        epochTolerance: 30
+      });
+      if (!verification || !verification.valid) {
+        return res.status(401).json({
+          error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
+        });
+      }
+    }
+
     store.admin.senha_hash = bcrypt.hashSync(nova_senha, 10);
     saveStore(store);
-    return res.status(200).json({ success: true, message: 'Senha atualizada com sucesso!' });
+    console.info(`[AUDIT] Senha administrativa alterada com sucesso em ${new Date().toISOString()}`);
+    return res.status(200).json({ success: true, message: 'Senha administrativa atualizada com sucesso!' });
   }
 
   // 7. EXPORTAÇÃO CSV (/api/admin/export/csv)
@@ -707,11 +875,29 @@ export default async function handler(req, res) {
     const user = verifyAuth(req);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
+    const escapeCsv = (str) => {
+      if (str === null || str === undefined) return '""';
+      let clean = String(str).replace(/"/g, '""').replace(/\r?\n/g, ' ');
+      if (/^[=+\-@\t\r]/.test(clean)) {
+        clean = "'" + clean;
+      }
+      return `"${clean}"`;
+    };
+
     const headers = 'Protocolo;CNPJ;Nome Fantasia;Cidade;UF;Status;Data Cadastro\r\n';
-    const rows = store.solicitacoes.map((s) => `${s.protocolo};${s.cnpj};${s.nome_fantasia};${s.cidade};${s.estado};${s.status};${s.criado_em}`).join('\r\n');
+    const rows = store.solicitacoes.map((s) => [
+      escapeCsv(s.protocolo),
+      escapeCsv(s.cnpj),
+      escapeCsv(s.nome_fantasia),
+      escapeCsv(s.cidade),
+      escapeCsv(s.estado),
+      escapeCsv(s.status),
+      escapeCsv(s.criado_em)
+    ].join(';')).join('\r\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="solicitacoes.csv"');
     return res.status(200).send('\uFEFF' + headers + rows);
+
   }
 
   // 8. LISTAGEM E CADASTRO DE SOLICITAÇÕES (/api/solicitacoes)

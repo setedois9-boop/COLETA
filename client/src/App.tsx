@@ -1,9 +1,10 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ConfigProvider } from './context/ConfigContext';
 import { AuthProvider } from './context/AuthContext';
 import { LiveUpdatesProvider } from './context/LiveUpdatesContext';
 import { ScrollToTop } from './components/ScrollToTop';
+import { WhatsAppFloatingButton } from './components/WhatsAppFloatingButton';
 import { Home } from './pages/Home';
 import { Cadastro } from './pages/Cadastro/Cadastro';
 import { CadastroConcluido } from './pages/CadastroConcluido';
@@ -13,6 +14,12 @@ import { AdminDashboard } from './pages/Admin/AdminDashboard';
 import { AdminSolicitacoes } from './pages/Admin/AdminSolicitacoes';
 import { AdminSolicitacaoDetalhes } from './pages/Admin/AdminSolicitacaoDetalhes';
 import { AdminConfiguracoes } from './pages/Admin/AdminConfiguracoes';
+
+const PublicWhatsAppButton: React.FC = () => {
+  const location = useLocation();
+  if (location.pathname.startsWith('/admin')) return null;
+  return <WhatsAppFloatingButton />;
+};
 
 export const App: React.FC = () => {
   return (
@@ -39,6 +46,7 @@ export const App: React.FC = () => {
               {/* Fallback */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
+            <PublicWhatsAppButton />
           </LiveUpdatesProvider>
         </BrowserRouter>
       </AuthProvider>
