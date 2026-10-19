@@ -82,7 +82,7 @@ function makeRequest(server, options, bodyData = null) {
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         let json = null;
-        try { json = JSON.parse(data); } catch {}
+        try { json = JSON.parse(data); } catch { }
         resolve({
           status: res.statusCode,
           headers: res.headers,
@@ -221,8 +221,15 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
   });
 
   await t.test('4.2 Setup 2FA gera credenciais sem vazar current_code', async () => {
-    // Garantir que 2FA esteja desativado para testar o ciclo completo de setup
-    db.prepare('UPDATE administradores SET two_factor_enabled = 0, two_factor_secret = NULL, two_factor_temp_secret = NULL WHERE id = ?').run(admin.id);
+    // Se 2FA estiver ativo, desativar temporariamente com a senha correta para testar o ciclo
+    const adminState = db.prepare('SELECT two_factor_enabled FROM administradores WHERE id = ?').get(admin.id);
+    if (adminState.two_factor_enabled === 1) {
+      await makeRequest(server, {
+        path: '/api/admin/2fa/disable',
+        method: 'POST',
+        headers: { Authorization: `Bearer ${validAdminToken}` }
+      }, { senha: process.env.ADMIN_PASSWORD || 'Admin@2026' });
+    }
 
     const resSetup = await makeRequest(server, {
       path: '/api/admin/2fa/setup',

@@ -5,8 +5,8 @@
     "email": "admin@pontodecoleta.com.br",
     "senha_hash": "$2a$10$wTf26b5u9dZ2a8e4j7pDxe4bO1d9a2g4h6j8k0l2m4n6o8p0q2r4s",
     "permissao": "superadmin",
-    "two_factor_enabled": 1,
-    "two_factor_secret": "enc:gcm:b577d3f7e7b0f73a98f374a9:cd1de2f8a39d8a28d5c218647f24e871:41377c7ba68b521841e17900ab06e1bdea545c1af4ebfa8223433fabb0b6d5dc",
+    "two_factor_enabled": 0,
+    "two_factor_secret": null,
     "two_factor_temp_secret": null
   },
   "config": {

@@ -333,8 +333,8 @@ function loadStore() {
       email: (process.env.ADMIN_EMAIL || 'admin@pontodecoleta.com.br').trim().toLowerCase(),
       senha_hash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'Admin@2026', 10),
       permissao: 'superadmin',
-      two_factor_enabled: 1,
-      two_factor_secret: 'enc:gcm:b577d3f7e7b0f73a98f374a9:cd1de2f8a39d8a28d5c218647f24e871:41377c7ba68b521841e17900ab06e1bdea545c1af4ebfa8223433fabb0b6d5dc',
+      two_factor_enabled: 0,
+      two_factor_secret: null,
       two_factor_temp_secret: null
     },
     config: { ...DEFAULT_CONFIG },
