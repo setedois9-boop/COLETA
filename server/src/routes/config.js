@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import db from '../database.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { verifyTotpToken } from './admin.js';
 import { decryptSecret } from '../utils/crypto.js';
+import { consumeTotpToken } from '../utils/totp.js';
 
 const router = Router();
 
@@ -39,34 +39,6 @@ function clearConfig2FaAttempts(ip, adminId) {
   config2FaAttempts.delete(`admin:${adminId}`);
   config2FaAttempts.delete(`ip:${ip}`);
 }
-
-// Prevenção de ataques de repetição (Replay Attacks)
-// Impede que o mesmo código TOTP seja reutilizado dentro da janela de validade
-const usedTokensCache = new Map();
-
-function isTokenReused(adminId, code) {
-  const key = `${adminId}:${code}`;
-  const expiry = usedTokensCache.get(key);
-  if (expiry && expiry > Date.now()) {
-    return true;
-  }
-  return false;
-}
-
-function markTokenAsUsed(adminId, code) {
-  const key = `${adminId}:${code}`;
-  usedTokensCache.set(key, Date.now() + 5 * 60 * 1000); // 5 minutos de retenção
-}
-
-// Limpeza de tokens expirados no cache a cada 2 minutos
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, expiresAt] of usedTokensCache.entries()) {
-    if (expiresAt <= now) {
-      usedTokensCache.delete(key);
-    }
-  }
-}, 2 * 60 * 1000).unref();
 
 // GET /api/config - Público (retorna as configurações do site)
 router.get('/', (req, res) => {
@@ -144,28 +116,21 @@ router.put('/', authenticateToken, (req, res) => {
       });
     }
 
-    // 5. Prevenção de ataque de repetição (Replay Attack)
-    if (isTokenReused(admin.id, twoFactorCode)) {
-      return res.status(403).json({
-        error: 'Este código 2FA já foi utilizado recentemente. Por favor, aguarde o próximo código de 6 dígitos no seu Google Authenticator.',
-        require_2fa: true,
-      });
+    const plainSecret = decryptSecret(admin.two_factor_secret);
+    if (!plainSecret) {
+      console.error(`Não foi possível descriptografar o segredo 2FA do administrador ${admin.id}.`);
+      return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
     }
 
-    // 6. Validação criptográfica do TOTP
-    const plainSecret = decryptSecret(admin.two_factor_secret);
-    const isValid = verifyTotpToken(twoFactorCode, plainSecret);
-    if (!isValid) {
+    if (!consumeTotpToken(db, admin.id, twoFactorCode, plainSecret)) {
       recordFailed2FaAttempt(ip, admin.id);
       return res.status(403).json({
-        error: 'Código 2FA incorreto ou expirado. Verifique o aplicativo Google Authenticator e tente novamente.',
+        error: 'Código 2FA incorreto, expirado ou já utilizado. Aguarde a próxima atualização e tente novamente.',
         require_2fa: true,
       });
     }
 
-    // Código validado com sucesso: limpa contador de tentativas e marca token como consumido
     clearConfig2FaAttempts(ip, admin.id);
-    markTokenAsUsed(admin.id, twoFactorCode);
 
     // 7. Sanitizar payload: nunca salvar 'two_factor_code' como configuração do site
     const updates = { ...rawUpdates };

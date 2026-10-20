@@ -18,12 +18,13 @@ import {
 import { useAuth } from '../../context/AuthContext';
 
 export const AdminLogin: React.FC = () => {
-  const { login } = useAuth();
+  const { login, verify2FA } = useAuth();
   const navigate = useNavigate();
 
   const [step, setStep] = useState<'credentials' | '2fa'>('credentials');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [preAuthToken, setPreAuthToken] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -43,6 +44,7 @@ export const AdminLogin: React.FC = () => {
     try {
       const res = await login(email, senha);
       if (res.require_2fa) {
+        setPreAuthToken(res.pre_auth_token || '');
         setStep('2fa');
         setErrorMsg('');
         return;
@@ -61,12 +63,18 @@ export const AdminLogin: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const res = await login(email, senha, twoFactorCode);
+      if (!preAuthToken) {
+        setErrorMsg('A etapa de autenticação expirou. Informe novamente seu e-mail e senha.');
+        setStep('credentials');
+        return;
+      }
+      const res = await verify2FA(preAuthToken, twoFactorCode);
       if (res.token) {
         navigate('/admin');
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Código do Google Authenticator inválido. Tente novamente.');
+      setErrorMsg(err.message || 'Código do Google Authenticator inválido ou expirado. Tente novamente.');
+      setTwoFactorCode('');
     } finally {
       setIsLoading(false);
     }
@@ -224,6 +232,7 @@ export const AdminLogin: React.FC = () => {
                   onClick={() => {
                     setStep('credentials');
                     setTwoFactorCode('');
+                    setPreAuthToken('');
                     setErrorMsg('');
                   }}
                   className="w-full py-2.5 px-4 bg-transparent hover:bg-slate-700/50 text-slate-400 hover:text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer text-center"

@@ -91,8 +91,9 @@ CREATE INDEX IF NOT EXISTS idx_historico_solicitacao_id ON public.historico_stat
 
 -- 5. Tabela de Configurações Dinâmicas do Site
 CREATE TABLE IF NOT EXISTS public.configuracoes_site (
-    chave TEXT PRIMARY KEY,
-    valor JSONB NOT NULL
+    id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
+    configuracao JSONB NOT NULL DEFAULT '{}'::jsonb,
+    atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- 6. Trigger para atualizar 'atualizado_em' automaticamente

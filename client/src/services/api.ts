@@ -346,21 +346,24 @@ export async function updateObservacoesInternas(id: number | string, observacoes
   return res.json();
 }
 
-// 9. Admin: Autenticação com suporte opcional a 2FA
+// 9. Admin: Autenticação com suporte opcional a 2FA e estado intermediário
 export async function loginAdmin(
   email: string,
   senha: string,
-  two_factor_code?: string
+  two_factor_code?: string,
+  pre_auth_token?: string
 ): Promise<LoginResponse> {
+  setAuthToken(null);
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: email.trim().toLowerCase(),
-        senha,
+        email: email ? email.trim().toLowerCase() : undefined,
+        senha: senha || undefined,
         two_factor_code: two_factor_code ? two_factor_code.replace(/\D/g, '') : undefined,
+        pre_auth_token: pre_auth_token || undefined,
       }),
     });
   } catch {
@@ -379,6 +382,52 @@ export async function loginAdmin(
     setAuthToken(json.token);
   }
   return json;
+}
+
+// 9.1 Admin: Concluir autenticação com código 2FA a partir do token intermediário
+export async function verify2FALogin(
+  pre_auth_token: string,
+  two_factor_code: string
+): Promise<LoginResponse> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/admin/2fa/verify-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pre_auth_token,
+        two_factor_code: two_factor_code.replace(/\D/g, ''),
+      }),
+    });
+  } catch {
+    throw new Error('Não foi possível conectar ao servidor Backend.');
+  }
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.error || 'Código do Google Authenticator inválido ou expirado.');
+  }
+
+  if (json.token) {
+    setAuthToken(json.token);
+  }
+  return json;
+}
+
+// 9.2 Admin: Logout com revogação e invalidação no backend
+export async function logoutAdmin(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/admin/logout`, {
+      method: 'POST',
+      headers: { ...authHeaders() },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'O servidor não conseguiu invalidar a sessão.');
+    }
+  } finally {
+    setAuthToken(null);
+  }
 }
 
 export async function fetchAdminMe(): Promise<{ admin: AdminUser }> {
@@ -449,7 +498,7 @@ export async function checkLiveUpdates(lastId: number): Promise<{
 }
 
 // 13. Admin: 2FA Google Authenticator
-export async function fetch2FAStatus(): Promise<{ enabled: boolean }> {
+export async function fetch2FAStatus(): Promise<{ enabled: boolean; pending: boolean }> {
   const res = await fetch(`${API_BASE}/admin/2fa/status`, {
     headers: { ...authHeaders() },
   });

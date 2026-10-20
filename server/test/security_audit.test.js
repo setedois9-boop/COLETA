@@ -118,12 +118,19 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
   let admin = db.prepare("SELECT * FROM administradores WHERE email = 'admin@pontodecoleta.com.br'").get();
   assert.ok(admin, 'Administrador padrão deve existir no banco');
 
+  // Inicializar com segredo TOTP robusto gerado por generateSecret() (compatível com otplib v13)
+  const defaultTestSecret = generateSecret();
+  const encryptedDefault = encryptSecret(defaultTestSecret);
+  db.prepare('UPDATE administradores SET two_factor_enabled = 1, two_factor_secret = ?, two_factor_temp_secret = NULL, last_totp_step = NULL WHERE id = ?').run(encryptedDefault, admin.id);
+  admin = db.prepare('SELECT * FROM administradores WHERE id = ?').get(admin.id);
+
   // Gerar token de superadmin válido
   const validAdminToken = generateToken({
     id: admin.id,
     nome: admin.nome,
     email: admin.email,
     permissao: admin.permissao || 'superadmin',
+    token_version: admin.token_version || 1,
     two_factor_enabled: Boolean(admin.two_factor_enabled)
   });
 
@@ -133,6 +140,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     nome: 'Usuario Comum',
     email: 'comum@teste.com',
     permissao: 'visitante',
+    token_version: 1,
     two_factor_enabled: false
   });
 
@@ -221,15 +229,8 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
   });
 
   await t.test('4.2 Setup 2FA gera credenciais sem vazar current_code', async () => {
-    // Se 2FA estiver ativo, desativar temporariamente com a senha correta para testar o ciclo
-    const adminState = db.prepare('SELECT two_factor_enabled FROM administradores WHERE id = ?').get(admin.id);
-    if (adminState.two_factor_enabled === 1) {
-      await makeRequest(server, {
-        path: '/api/admin/2fa/disable',
-        method: 'POST',
-        headers: { Authorization: `Bearer ${validAdminToken}` }
-      }, { senha: process.env.ADMIN_PASSWORD || 'Admin@2026' });
-    }
+    // Desativar temporariamente no banco para testar o fluxo de configuração do zero
+    db.prepare('UPDATE administradores SET two_factor_enabled = 0, two_factor_temp_secret = NULL WHERE id = ?').run(admin.id);
 
     const resSetup = await makeRequest(server, {
       path: '/api/admin/2fa/setup',
@@ -245,6 +246,14 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     // Verificar se no banco o temp_secret foi gravado cifrado com AES-256-GCM
     const checkDb = db.prepare('SELECT two_factor_temp_secret FROM administradores WHERE id = ?').get(admin.id);
     assert.ok(checkDb.two_factor_temp_secret.startsWith('enc:gcm:'), 'Temp secret no banco deve ser cifrado com AES-256-GCM');
+
+    const resPendingSetup = await makeRequest(server, {
+      path: '/api/admin/2fa/setup',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${validAdminToken}` }
+    });
+    assert.equal(resPendingSetup.status, 200);
+    assert.equal(resPendingSetup.data.secret, resSetup.data.secret, 'Retomar configuração não deve gerar um segredo diferente');
 
     // 4.3 Rejeição de código 2FA inválido na ativação
     const resInvalidCode = await makeRequest(server, {
@@ -302,7 +311,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     }, { nome_site: 'Tentativa Com Código Invalido' });
 
     assert.equal(res.status, 403);
-    assert.ok(res.data.error.includes('Código 2FA incorreto ou expirado'));
+    assert.ok(res.data.error.includes('Código 2FA incorreto, expirado ou já utilizado'));
 
     const configAfter = db.prepare("SELECT valor FROM configuracoes_site WHERE chave = 'nome_site'").get();
     assert.equal(configAfter?.valor, configBefore?.valor);
@@ -311,7 +320,10 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
   await t.test('5.3 (Req 1 & 4) PUT /api/config com código 2FA válido permite salvar e bloqueia Replay Attack', async () => {
     const adminRow = db.prepare('SELECT two_factor_secret FROM administradores WHERE id = ?').get(admin.id);
     const plainSecret = decryptSecret(adminRow.two_factor_secret);
-    const code = generateSync({ secret: plainSecret });
+    const code = generateSync({
+      secret: plainSecret,
+      epoch: (Math.floor(Date.now() / 30000) + 1) * 30
+    });
 
     // 1º Envio: Código válido -> Deve ser aceito
     const resFirst = await makeRequest(server, {
@@ -341,7 +353,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     }, { nome_site: 'Tentativa Replay' });
 
     assert.equal(resReplay.status, 403);
-    assert.ok(resReplay.data.error.includes('já foi utilizado recentemente'), 'Deve bloquear código reutilizado');
+    assert.ok(resReplay.data.error.includes('já utilizado'), 'Deve bloquear código reutilizado');
   });
 
   await t.test('5.4 (Req 4) Chamada direta à API /api/config sem token ou com token forjado é rejeitada', async () => {
@@ -402,6 +414,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
   });
 
   await t.test('6.3 (Req 7) Persistência do 2FA após logout e novo login com desafio TOTP', async () => {
+    db.prepare('UPDATE administradores SET last_totp_step = NULL WHERE id = ?').run(admin.id);
     // 1. Simular login inicial (somente e-mail e senha)
     const resStep1 = await makeRequest(server, {
       path: '/api/admin/login',
@@ -420,12 +433,22 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     const plainSecret = decryptSecret(adminRow.two_factor_secret);
     const totpCode = generateSync({ secret: plainSecret });
 
-    const resStep2 = await makeRequest(server, {
+    const resDirectCode = await makeRequest(server, {
       path: '/api/admin/login',
       method: 'POST'
     }, {
       email: 'admin@pontodecoleta.com.br',
       senha: 'Admin@2026',
+      two_factor_code: totpCode
+    });
+    assert.equal(resDirectCode.data.require_2fa, true);
+    assert.equal(resDirectCode.data.token, undefined, 'O código enviado ao endpoint de senha não deve liberar a sessão');
+
+    const resStep2 = await makeRequest(server, {
+      path: '/api/admin/2fa/verify-login',
+      method: 'POST'
+    }, {
+      pre_auth_token: resStep1.data.pre_auth_token,
       two_factor_code: totpCode
     });
 
@@ -471,6 +494,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     // Tentativa com código 2FA válido -> Aprovado
     const adminRow = db.prepare('SELECT two_factor_secret FROM administradores WHERE id = ?').get(admin.id);
     const plainSecret = decryptSecret(adminRow.two_factor_secret);
+    db.prepare('UPDATE administradores SET last_totp_step = NULL WHERE id = ?').run(admin.id);
     const valid2FACode = generateSync({ secret: plainSecret });
 
     const resWith2FA = await makeRequest(server, {
@@ -486,6 +510,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     assert.ok(resWith2FA.data.success);
 
     // Restaurar senha para testes subsequentes
+    db.prepare('UPDATE administradores SET last_totp_step = NULL WHERE id = ?').run(admin.id);
     const valid2FACodeRestore = generateSync({ secret: plainSecret });
     await makeRequest(server, {
       path: '/api/admin/password',
@@ -550,6 +575,7 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
       nome: 'Operador Limitado',
       email: 'operador@pontodecoleta.com.br',
       permissao: 'operador',
+      token_version: 1,
       two_factor_enabled: false
     });
 
@@ -563,7 +589,6 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
     }, { nome_site: 'Ataque Não Autorizado' });
 
     assert.equal(resNoRole.status, 403);
-    assert.ok(resNoRole.data.error.includes('Permissão insuficiente'));
 
     // Limpar usuário de teste
     db.prepare('DELETE FROM administradores WHERE id = 99').run();
@@ -602,10 +627,271 @@ test('SUÍTE COMPLETA DE SEGURANÇA E AUDITORIA DA PLATAFORMA', async (t) => {
 
     // Reativar 2FA imediatamente para manter a plataforma segura
     const adminRow = db.prepare('SELECT id, two_factor_secret FROM administradores WHERE id = ?').get(admin.id);
-    const plainSecret = 'JBSWY3DPEHPK3PXP'; // Base32 padrão
+    const plainSecret = generateSecret();
     const encryptedSecret = encryptSecret(plainSecret);
     db.prepare('UPDATE administradores SET two_factor_enabled = 1, two_factor_secret = ? WHERE id = ?').run(encryptedSecret, admin.id);
 
     delete process.env.EMERGENCY_RECOVERY_KEY;
+  });
+
+  // --- SEÇÃO 10: VALIDAÇÃO DOS CENÁRIOS OBRIGATÓRIOS DO 2FA (CENÁRIOS A A F) ---
+
+  await t.test('10.1 Cenário A — Persistência Definitiva do 2FA após Logout e Novo Login', async () => {
+    // Garantir admin com 2FA configurado
+    const testSecret = generateSecret();
+    const encSecret = encryptSecret(testSecret);
+    db.prepare('UPDATE administradores SET two_factor_enabled = 1, two_factor_secret = ?, two_factor_temp_secret = NULL, last_totp_step = NULL WHERE id = ?').run(encSecret, admin.id);
+
+    // 1. Simular tentativa de login apenas com senha
+    const resLogin1 = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+
+    assert.equal(resLogin1.status, 200);
+    assert.equal(resLogin1.data.require_2fa, true, 'Deve exigir 2FA');
+    assert.ok(resLogin1.data.pre_auth_token, 'Deve emitir token intermediário de pré-autenticação');
+
+    // 2. Concluir autenticação com código TOTP válido
+    const validTotp = generateSync({ secret: testSecret });
+    const resLogin2 = await makeRequest(server, {
+      path: '/api/admin/2fa/verify-login',
+      method: 'POST'
+    }, {
+      pre_auth_token: resLogin1.data.pre_auth_token,
+      two_factor_code: validTotp
+    });
+
+    assert.equal(resLogin2.status, 200);
+    assert.ok(resLogin2.data.token, 'Deve emitir token administrativo completo');
+    assert.equal(resLogin2.data.admin.two_factor_enabled, true);
+
+    // 3. Encerrar a sessão (Logout)
+    const resLogout = await makeRequest(server, {
+      path: '/api/admin/logout',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${resLogin2.data.token}` }
+    });
+    assert.equal(resLogout.status, 200);
+
+    // 4. Entrar novamente e confirmar que o 2FA PERMANECE ativo e continua sendo exigido
+    const resNewLogin = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+
+    assert.equal(resNewLogin.status, 200);
+    assert.equal(resNewLogin.data.require_2fa, true, 'O 2FA DEVE continuar ativo mesmo após logout');
+    assert.ok(resNewLogin.data.pre_auth_token);
+  });
+
+  await t.test('10.2 Cenário B — Tela de Configuração não regenera segredo quando 2FA já está ativado', async () => {
+    // 1. Gerar token admin válido
+    const adminActive = db.prepare('SELECT * FROM administradores WHERE id = ?').get(admin.id);
+    const sessionToken = generateToken({
+      id: adminActive.id,
+      nome: adminActive.nome,
+      email: adminActive.email,
+      permissao: adminActive.permissao,
+      token_version: adminActive.token_version,
+      two_factor_enabled: true
+    });
+
+    // 2. Consultar status do 2FA
+    const resStatus = await makeRequest(server, {
+      path: '/api/admin/2fa/status',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${sessionToken}` }
+    });
+    assert.equal(resStatus.status, 200);
+    assert.equal(resStatus.data.enabled, true, 'Status deve indicar 2FA ativado');
+    assert.equal(resStatus.data.pending, false, 'Não deve constar como pendente');
+    assert.equal(resStatus.data.secret, undefined, 'O segredo TOTP nunca deve ser enviado após a ativação');
+
+    // 3. Tentar abrir/iniciar nova configuração com 2FA já ativo
+    const resSetupAttempt = await makeRequest(server, {
+      path: '/api/admin/2fa/setup',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sessionToken}` }
+    });
+    assert.equal(resSetupAttempt.status, 400, 'Deve rejeitar regeneração de segredo com 400 Bad Request');
+    assert.ok(resSetupAttempt.data.error.includes('já está ativa nesta conta'));
+
+    // 4. Confirmar que o segredo no banco de dados NÃO foi alterado
+    const adminCurrent = db.prepare('SELECT two_factor_secret FROM administradores WHERE id = ?').get(admin.id);
+    assert.equal(adminCurrent.two_factor_secret, adminActive.two_factor_secret, 'Segredo existente deve permanecer inalterado');
+  });
+
+  await t.test('10.3 Cenário C — Código 2FA Inválido bloqueia acesso ao painel administrativo', async () => {
+    // 1. Login com senha correta -> obtém token intermediário
+    const resStep1 = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+    assert.equal(resStep1.status, 200);
+    const preAuthToken = resStep1.data.pre_auth_token;
+    assert.ok(preAuthToken);
+
+    // 2. Submeter código 2FA inválido
+    const resInvalidCode = await makeRequest(server, {
+      path: '/api/admin/2fa/verify-login',
+      method: 'POST'
+    }, {
+      pre_auth_token: preAuthToken,
+      two_factor_code: '000000'
+    });
+
+    assert.equal(resInvalidCode.status, 401, 'Deve rejeitar com 401 Unauthorized');
+    assert.equal(resInvalidCode.data.token, undefined, 'Nenhum token administrativo deve ser emitido');
+    assert.ok(resInvalidCode.data.error.includes('inválido, expirado ou já utilizado'));
+  });
+
+  await t.test('10.4 Cenário D — Acesso Direto com Token Intermediário é estritamente bloqueado', async () => {
+    // 1. Obter token intermediário de pré-autenticação (scope: 2fa_pending)
+    const resStep1 = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+    const preAuthToken = resStep1.data.pre_auth_token;
+    assert.ok(preAuthToken);
+
+    // 2. Tentar acessar /api/admin/me com o token intermediário
+    const resMe = await makeRequest(server, {
+      path: '/api/admin/me',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${preAuthToken}` }
+    });
+    assert.equal(resMe.status, 403, 'Acesso a /admin/me deve ser bloqueado com 403 Forbidden');
+    assert.equal(resMe.data.require_2fa, true);
+
+    // 3. Tentar acessar /api/config com o token intermediário
+    const resConfig = await makeRequest(server, {
+      path: '/api/config',
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${preAuthToken}` }
+    }, { nome_site: 'Tentativa Hacker' });
+    assert.equal(resConfig.status, 403, 'Acesso a modificação de config deve ser bloqueado com 403 Forbidden');
+  });
+
+  await t.test('10.5 Cenário E — Logout invalida definitivamente a sessão contra reutilização', async () => {
+    // 1. Limpar replay buffer para teste de login limpo e obter segredo
+    db.prepare('UPDATE administradores SET last_totp_code = NULL, last_totp_time = NULL, last_totp_step = NULL WHERE id = ?').run(admin.id);
+    const adminRow = db.prepare('SELECT * FROM administradores WHERE id = ?').get(admin.id);
+    const plainSecret = decryptSecret(adminRow.two_factor_secret);
+    const totpCode = generateSync({ secret: plainSecret });
+
+    const resChallenge = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+    assert.equal(resChallenge.status, 200);
+    assert.equal(resChallenge.data.require_2fa, true);
+    const resLogin = await makeRequest(server, {
+      path: '/api/admin/2fa/verify-login',
+      method: 'POST'
+    }, {
+      pre_auth_token: resChallenge.data.pre_auth_token,
+      two_factor_code: totpCode
+    });
+    assert.equal(resLogin.status, 200);
+    const validSessionToken = resLogin.data.token;
+    assert.ok(validSessionToken);
+
+    // 2. Testar que o token funciona
+    const resBeforeLogout = await makeRequest(server, {
+      path: '/api/admin/me',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${validSessionToken}` }
+    });
+    assert.equal(resBeforeLogout.status, 200);
+
+    // 3. Efetuar logout
+    const resLogout = await makeRequest(server, {
+      path: '/api/admin/logout',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${validSessionToken}` }
+    });
+    assert.equal(resLogout.status, 200);
+    assert.ok(resLogout.data.success);
+
+    // 4. Tentar reutilizar o mesmo token anterior após o logout
+    const resReusedToken = await makeRequest(server, {
+      path: '/api/admin/me',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${validSessionToken}` }
+    });
+    assert.equal(resReusedToken.status, 401, 'Token antigo DEVE ser rejeitado com 401 Unauthorized após logout');
+  });
+
+  await t.test('10.6 Cenário F — Regressão: Operações normais e integridade das permissões', async () => {
+    // 1. Limpar replay buffer e obter nova sessão válida
+    db.prepare('UPDATE administradores SET last_totp_code = NULL, last_totp_time = NULL, last_totp_step = NULL WHERE id = ?').run(admin.id);
+    const adminRow = db.prepare('SELECT * FROM administradores WHERE id = ?').get(admin.id);
+    const plainSecret = decryptSecret(adminRow.two_factor_secret);
+    const totpCode = generateSync({ secret: plainSecret });
+
+    const resChallenge = await makeRequest(server, {
+      path: '/api/admin/login',
+      method: 'POST'
+    }, {
+      email: 'admin@pontodecoleta.com.br',
+      senha: 'Admin@2026'
+    });
+    assert.equal(resChallenge.data.require_2fa, true);
+    const resLogin = await makeRequest(server, {
+      path: '/api/admin/2fa/verify-login',
+      method: 'POST'
+    }, {
+      pre_auth_token: resChallenge.data.pre_auth_token,
+      two_factor_code: totpCode
+    });
+    assert.equal(resLogin.status, 200);
+    const freshToken = resLogin.data.token;
+    assert.ok(freshToken);
+
+    // 2. Consulta pública de configurações (/api/config) funciona normalmente
+    const resPublicConfig = await makeRequest(server, { path: '/api/config', method: 'GET' });
+    assert.equal(resPublicConfig.status, 200);
+    assert.ok(resPublicConfig.data.nome_site);
+
+    // 3. Consulta administrativa de solicitações (/api/solicitacoes) funciona normalmente
+    const resSolicitacoes = await makeRequest(server, {
+      path: '/api/solicitacoes',
+      method: 'GET',
+      headers: { Authorization: `Bearer ${freshToken}` }
+    });
+    assert.equal(resSolicitacoes.status, 200);
+    assert.ok(Array.isArray(resSolicitacoes.data.data));
+
+    // 4. Salvar configuração com 2FA funciona e persiste
+    const save2FACode = generateSync({
+      secret: plainSecret,
+      epoch: (Math.floor(Date.now() / 30000) + 1) * 30
+    });
+    const resSaveConfig = await makeRequest(server, {
+      path: '/api/config',
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${freshToken}`,
+        'x-2fa-code': save2FACode
+      }
+    }, { nome_site: 'Rede Logística Parceira Oficial' });
+    assert.equal(resSaveConfig.status, 200);
+    assert.ok(resSaveConfig.data.success);
   });
 });

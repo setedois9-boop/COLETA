@@ -49,9 +49,14 @@ export const AdminLayout: React.FC = () => {
     { label: 'Configurações', path: '/admin/configuracoes', icon: Settings },
   ];
 
-  const handleLogout = () => {
-    logout();
-    navigate('/admin/login');
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Não foi possível confirmar o encerramento da sessão no servidor.');
+    } finally {
+      navigate('/admin/login');
+    }
   };
 
   return (

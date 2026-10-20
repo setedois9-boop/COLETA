@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { generateSecret, generateURI, verifySync, generateSync } from 'otplib';
+import jwt from 'jsonwebtoken';
+import { generateSecret, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import db from '../database.js';
-import { authenticateToken, generateToken } from '../middleware/auth.js';
+import { authenticateToken, generateToken, generatePreAuthToken, revokeToken, getJwtSecret } from '../middleware/auth.js';
 import { encryptSecret, decryptSecret } from '../utils/crypto.js';
+import { consumeTotpToken, getTotpStep } from '../utils/totp.js';
 
 const router = Router();
 
@@ -17,6 +19,9 @@ function checkLoginThrottle(ip) {
   if (record.lockedUntil && record.lockedUntil > Date.now()) {
     const minutesLeft = Math.ceil((record.lockedUntil - Date.now()) / 60000);
     return { allowed: false, minutesLeft };
+  }
+  if (record.lockedUntil || Date.now() - record.firstAttempt > 15 * 60 * 1000) {
+    loginAttempts.delete(ip);
   }
   return { allowed: true };
 }
@@ -34,39 +39,7 @@ function clearLoginAttempts(ip) {
   loginAttempts.delete(ip);
 }
 
-// Função auxiliar para validação resiliente de códigos TOTP (compatível com variações de relógio)
-export function verifyTotpToken(cleanCode, secret) {
-  if (!cleanCode || !secret) return false;
-
-  // 1. Verificação padrão com tolerância estendida de época
-  try {
-    const verification = verifySync({
-      token: cleanCode,
-      secret,
-      epochTolerance: 120,
-    });
-    if (verification && verification.valid) return true;
-  } catch {}
-
-  // 2. Comparação direta com o código do timestamp atual
-  try {
-    const current = generateSync({ secret });
-    if (cleanCode === current) return true;
-  } catch {}
-
-  // 3. Verificação em janela de -6 a +6 passos (3 minutos para frente ou para trás)
-  const now = Date.now();
-  for (let offset = -6; offset <= 6; offset++) {
-    try {
-      const stepToken = generateSync({ secret, epoch: now + offset * 30000 });
-      if (cleanCode === stepToken) return true;
-    } catch {}
-  }
-
-  return false;
-}
-
-// POST /api/admin/login - Autenticação de administradores com suporte a 2FA do Google Authenticator
+// POST /api/admin/login - Autenticação com suporte a estado intermediário para 2FA
 router.post('/login', (req, res) => {
   try {
     const ip = req.ip || req.connection.remoteAddress || 'unknown';
@@ -77,53 +50,52 @@ router.post('/login', (req, res) => {
       });
     }
 
-    const { email, senha, two_factor_code } = req.body;
+    const { email, senha, pre_auth_token } = req.body || {};
+
+    if (pre_auth_token) {
+      return res.status(400).json({ error: 'Use o endpoint de validação do segundo fator para concluir o login.' });
+    }
 
     if (!email || !senha) {
       return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
     }
 
     const admin = db.prepare('SELECT * FROM administradores WHERE email = ?').get(email.trim().toLowerCase());
-    if (!admin) {
+    if (!admin || !bcrypt.compareSync(senha, admin.senha_hash)) {
       recordFailedLogin(ip);
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
-    const match = bcrypt.compareSync(senha, admin.senha_hash);
-    if (!match) {
-      recordFailedLogin(ip);
-      return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
-    }
-
-    // Se o 2FA do Google Authenticator estiver ativado para esta conta
-    if (admin.two_factor_enabled === 1 && admin.two_factor_secret) {
-      if (!two_factor_code) {
-        return res.json({
-          require_2fa: true,
-          email: admin.email,
-          message: 'Autenticação em duas etapas requerida. Digite o código de 6 dígitos gerado pelo Google Authenticator.'
-        });
+    if (Number(admin.two_factor_enabled) === 1) {
+      if (!admin.two_factor_secret) {
+        console.error(`Administrador ${admin.id} tem 2FA habilitado sem segredo persistido.`);
+        return res.status(503).json({ error: 'A configuração de segurança da conta está inconsistente. Contate o suporte.' });
       }
 
-      const cleanCode = String(two_factor_code).replace(/\D/g, '');
-      const plainSecret = decryptSecret(admin.two_factor_secret);
-      const valid = verifyTotpToken(cleanCode, plainSecret);
+      const preAuthToken = generatePreAuthToken({
+        id: admin.id,
+        email: admin.email,
+        nome: admin.nome,
+        token_version: Number(admin.token_version || 1)
+      });
 
-      if (!valid) {
-        recordFailedLogin(ip);
-        return res.status(401).json({
-          error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
-        });
-      }
+      return res.status(200).json({
+        require_2fa: true,
+        pre_auth_token: preAuthToken,
+        email: admin.email,
+        message: 'Autenticação em duas etapas requerida. Digite o código de 6 dígitos gerado pelo aplicativo autenticador.'
+      });
     }
 
     clearLoginAttempts(ip);
 
+    // Emissão do token administrativo definitivo apenas com credenciais e 2FA 100% validados
     const token = generateToken({
       id: admin.id,
       nome: admin.nome,
       email: admin.email,
       permissao: admin.permissao,
+      token_version: admin.token_version || 1,
       two_factor_enabled: Boolean(admin.two_factor_enabled)
     });
 
@@ -141,6 +113,114 @@ router.post('/login', (req, res) => {
   } catch (error) {
     console.error('Erro no login administrativo:', error);
     res.status(500).json({ error: 'Falha interna durante a autenticação.' });
+  }
+});
+
+// POST /api/admin/2fa/verify-login - Endpoint dedicado para validar estado intermediário de 2FA
+router.post('/2fa/verify-login', (req, res) => {
+  try {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const throttle = checkLoginThrottle(ip);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
+    const { pre_auth_token, two_factor_code, code } = req.body || {};
+    const totpInput = two_factor_code || code;
+
+    if (!pre_auth_token) {
+      return res.status(400).json({ error: 'Token de autenticação intermediário é obrigatório.' });
+    }
+
+    if (!totpInput) {
+      return res.status(400).json({ error: 'Código de 6 dígitos do Google Authenticator é obrigatório.' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(pre_auth_token, getJwtSecret());
+    } catch {
+      return res.status(401).json({ error: 'Token temporário expirado ou inválido. Realize login novamente com suas credenciais.' });
+    }
+
+    if (decoded.scope !== '2fa_pending' || !decoded.id) {
+      return res.status(401).json({ error: 'Token de autenticação intermediário com escopo inválido.' });
+    }
+
+    const admin = db.prepare('SELECT * FROM administradores WHERE id = ?').get(decoded.id);
+    if (!admin) {
+      return res.status(401).json({ error: 'Administrador não encontrado.' });
+    }
+
+    if (Number(admin.two_factor_enabled) !== 1 || !admin.two_factor_secret) {
+      return res.status(400).json({ error: '2FA não está configurado para esta conta.' });
+    }
+
+    if (Number(decoded.token_version) !== Number(admin.token_version || 1)) {
+      return res.status(401).json({ error: 'A etapa de autenticação expirou. Realize login novamente.' });
+    }
+
+    const cleanCode = String(totpInput).replace(/\D/g, '');
+    const plainSecret = decryptSecret(admin.two_factor_secret);
+    if (!plainSecret) {
+      console.error(`Não foi possível descriptografar o segredo 2FA do administrador ${admin.id}.`);
+      return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
+    }
+
+    if (!consumeTotpToken(db, admin.id, cleanCode, plainSecret)) {
+      recordFailedLogin(ip);
+      return res.status(401).json({
+        error: 'Código do autenticador inválido, expirado ou já utilizado. Aguarde a próxima atualização e tente novamente.'
+      });
+    }
+
+    clearLoginAttempts(ip);
+
+    const token = generateToken({
+      id: admin.id,
+      nome: admin.nome,
+      email: admin.email,
+      permissao: admin.permissao,
+      token_version: admin.token_version || 1,
+      two_factor_enabled: true
+    });
+
+    res.json({
+      success: true,
+      token,
+      admin: {
+        id: admin.id,
+        nome: admin.nome,
+        email: admin.email,
+        permissao: admin.permissao,
+        two_factor_enabled: true
+      }
+    });
+  } catch (error) {
+    console.error('Erro na validação do 2FA:', error);
+    res.status(500).json({ error: 'Falha interna durante a validação do segundo fator.' });
+  }
+});
+
+// POST /api/admin/logout - Invalidação definitiva da sessão e revogação de tokens
+router.post('/logout', authenticateToken, (req, res) => {
+  try {
+    const token = req.token || (req.headers['authorization'] || '').split(' ')[1];
+    if (token) {
+      revokeToken(token);
+    }
+    if (req.user?.id) {
+      db.prepare('UPDATE administradores SET token_version = COALESCE(token_version, 1) + 1 WHERE id = ?').run(req.user.id);
+    }
+    res.json({
+      success: true,
+      message: 'Sessão administrativa encerrada com sucesso.'
+    });
+  } catch (err) {
+    console.error('Erro ao encerrar sessão:', err);
+    res.status(500).json({ error: 'Falha ao processar logout.' });
   }
 });
 
@@ -162,16 +242,25 @@ router.get('/me', authenticateToken, (req, res) => {
   });
 });
 
-// GET /api/admin/2fa/status - Status do 2FA do usuário logado
+// GET /api/admin/2fa/status - Status do 2FA do usuário logado (consulta real ao backend)
 router.get('/2fa/status', authenticateToken, (req, res) => {
   try {
-    const admin = db.prepare('SELECT id, two_factor_enabled, two_factor_secret FROM administradores WHERE id = ? OR email = ?').get(req.user?.id || 0, req.user?.email || '');
+    const admin = db.prepare('SELECT id, two_factor_enabled, two_factor_secret, two_factor_temp_secret FROM administradores WHERE id = ? OR email = ?').get(req.user?.id || 0, req.user?.email || '');
     if (!admin) {
       return res.status(404).json({ error: 'Administrador não encontrado.' });
     }
+    if (Number(admin.two_factor_enabled) === 1 && !admin.two_factor_secret) {
+      console.error(`Administrador ${admin.id} tem 2FA habilitado sem segredo persistido.`);
+      return res.status(503).json({ error: 'A configuração de segurança da conta está inconsistente.' });
+    }
     const isEnabled = Boolean(Number(admin.two_factor_enabled) === 1 && admin.two_factor_secret);
-    res.json({ enabled: isEnabled });
+    const isPending = Boolean(!isEnabled && admin.two_factor_temp_secret);
+    res.json({
+      enabled: isEnabled,
+      pending: isPending
+    });
   } catch (err) {
+    console.error('Erro ao consultar status do 2FA:', err);
     res.status(500).json({ error: 'Erro ao consultar status do 2FA.' });
   }
 });
@@ -216,7 +305,7 @@ router.post('/2fa/setup', authenticateToken, async (req, res) => {
     const adminId = req.user?.id;
     if (!adminId) return res.status(401).json({ error: 'Sessão administrativa inválida.' });
 
-    const admin = db.prepare('SELECT id, email, permissao, two_factor_enabled FROM administradores WHERE id = ?').get(adminId);
+    const admin = db.prepare('SELECT id, email, permissao, two_factor_enabled, two_factor_secret, two_factor_temp_secret FROM administradores WHERE id = ?').get(adminId);
     if (!admin) return res.status(401).json({ error: 'Acesso não autorizado. Administrador não encontrado.' });
 
     const allowedRoles = ['admin', 'superadmin', 'master', 'administrador'];
@@ -225,17 +314,24 @@ router.post('/2fa/setup', authenticateToken, async (req, res) => {
     }
 
     // Se o 2FA já estiver ativo, impede reconfiguração silenciosa sem desativação prévia autorizada
-    if (admin.two_factor_enabled === 1) {
+    if (Number(admin.two_factor_enabled) === 1) {
       return res.status(400).json({
         error: 'A autenticação em duas etapas já está ativa nesta conta. Para reconfigurar, desative-a primeiro na aba Segurança confirmando sua senha.'
       });
     }
 
-    const secret = generateSecret();
-
-    // Salvar segredo temporário criptografado com AES-256-GCM vinculado estritamente à conta autenticada
-    const encryptedSecret = encryptSecret(secret);
-    db.prepare('UPDATE administradores SET two_factor_temp_secret = ? WHERE id = ?').run(encryptedSecret, admin.id);
+    let secret;
+    if (admin.two_factor_temp_secret) {
+      secret = decryptSecret(admin.two_factor_temp_secret);
+      if (!secret) {
+        console.error(`Não foi possível descriptografar o segredo 2FA pendente do administrador ${admin.id}.`);
+        return res.status(503).json({ error: 'Não foi possível recuperar a configuração pendente do autenticador.' });
+      }
+    } else {
+      secret = generateSecret();
+      const encryptedSecret = encryptSecret(secret);
+      db.prepare('UPDATE administradores SET two_factor_temp_secret = ? WHERE id = ?').run(encryptedSecret, admin.id);
+    }
 
     const otpauthUrl = generateURI({
       issuer: 'Ponto de Coleta Admin',
@@ -274,6 +370,14 @@ router.post('/2fa/direct-enable', authenticateToken, (req, res) => {
 // POST /api/admin/2fa/verify-and-enable - Confirmar código e ativar 2FA
 router.post('/2fa/verify-and-enable', authenticateToken, (req, res) => {
   try {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const throttle = checkLoginThrottle(ip);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
     const adminId = req.user?.id;
     if (!adminId) return res.status(401).json({ error: 'Sessão administrativa inválida.' });
 
@@ -282,8 +386,12 @@ router.post('/2fa/verify-and-enable', authenticateToken, (req, res) => {
       return res.status(400).json({ error: 'O código de 6 dígitos é obrigatório.' });
     }
 
-    const admin = db.prepare('SELECT id, two_factor_temp_secret, two_factor_secret, permissao FROM administradores WHERE id = ?').get(adminId);
+    const admin = db.prepare('SELECT id, two_factor_enabled, two_factor_temp_secret, two_factor_secret, permissao FROM administradores WHERE id = ?').get(adminId);
     if (!admin) return res.status(401).json({ error: 'Acesso não autorizado. Administrador não encontrado.' });
+
+    if (Number(admin.two_factor_enabled) === 1 && admin.two_factor_secret) {
+      return res.status(409).json({ error: 'O 2FA já está ativado nesta conta.' });
+    }
 
     const allowedRoles = ['admin', 'superadmin', 'master', 'administrador'];
     if (admin.permissao && !allowedRoles.includes(admin.permissao.toLowerCase())) {
@@ -296,34 +404,29 @@ router.post('/2fa/verify-and-enable', authenticateToken, (req, res) => {
     }
 
     const cleanCode = String(token).replace(/\D/g, '');
-    const valid = verifyTotpToken(cleanCode, secret);
-
-    if (!valid) {
+    const matchedStep = getTotpStep(cleanCode, secret);
+    if (matchedStep === null) {
+      recordFailedLogin(ip);
       return res.status(400).json({
         error: 'Código inválido ou expirado. Certifique-se de digitar os 6 dígitos gerados no aplicativo Google Authenticator.'
       });
     }
 
-    // Ativar 2FA definitivamente armazenando o segredo criptografado com AES-256-GCM
     const encryptedSecret = encryptSecret(secret);
-    db.prepare(`
+    const result = db.prepare(`
       UPDATE administradores
       SET two_factor_secret = ?,
           two_factor_enabled = 1,
-          two_factor_temp_secret = NULL
-      WHERE id = ?
-    `).run(encryptedSecret, admin.id);
+          two_factor_temp_secret = NULL,
+          last_totp_step = ?
+      WHERE id = ? AND COALESCE(two_factor_enabled, 0) = 0
+    `).run(encryptedSecret, matchedStep, admin.id);
 
-    try {
-      const pStatePath = path.resolve('api/persistent_state.json');
-      if (fs.existsSync(pStatePath)) {
-        const pState = JSON.parse(fs.readFileSync(pStatePath, 'utf-8'));
-        pState.admin.two_factor_enabled = 1;
-        pState.admin.two_factor_secret = encryptedSecret;
-        pState.admin.two_factor_temp_secret = null;
-        fs.writeFileSync(pStatePath, JSON.stringify(pState, null, 2), 'utf-8');
-      }
-    } catch {}
+    if (result.changes !== 1) {
+      return res.status(409).json({ error: 'A configuração do 2FA foi alterada. Consulte o status e tente novamente.' });
+    }
+
+    clearLoginAttempts(ip);
 
     res.json({
       success: true,
@@ -604,7 +707,11 @@ router.put('/password', authenticateToken, (req, res) => {
     }
 
     // Exigir confirmação 2FA se o administrador tiver o 2FA ativo
-    if (admin.two_factor_enabled === 1 && admin.two_factor_secret) {
+    if (Number(admin.two_factor_enabled) === 1) {
+      if (!admin.two_factor_secret) {
+        console.error(`Administrador ${admin.id} tem 2FA habilitado sem segredo persistido.`);
+        return res.status(503).json({ error: 'A configuração de segurança da conta está inconsistente.' });
+      }
       const tokenInput = String(two_factor_code || code || '').replace(/\D/g, '');
       if (!tokenInput || tokenInput.length !== 6) {
         return res.status(400).json({
@@ -612,7 +719,10 @@ router.put('/password', authenticateToken, (req, res) => {
         });
       }
       const plainSecret = decryptSecret(admin.two_factor_secret);
-      const isTotpValid = verifyTotpToken(tokenInput, plainSecret);
+      if (!plainSecret) {
+        return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
+      }
+      const isTotpValid = consumeTotpToken(db, admin.id, tokenInput, plainSecret);
       if (!isTotpValid) {
         return res.status(401).json({
           error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'

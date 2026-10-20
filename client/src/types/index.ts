@@ -195,6 +195,7 @@ export interface LoginResponse {
   token?: string;
   admin?: AdminUser;
   require_2fa?: boolean;
+  pre_auth_token?: string;
   email?: string;
   message?: string;
 }

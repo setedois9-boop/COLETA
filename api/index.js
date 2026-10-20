@@ -6,10 +6,12 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import Busboy from 'busboy';
 import { createClient } from '@supabase/supabase-js';
-import { generateSecret, generateURI, verifySync } from 'otplib';
+import { generateSecret, generateURI } from 'otplib';
 import QRCode from 'qrcode';
+import { getTotpStep } from '../server/src/utils/totp.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || '6c48d88a3273c0ea10957e9dbd2c789784f8541dbf2391bed73c8f54760116bf';
+const JWT_SECRET = process.env.JWT_SECRET?.trim() ||
+  (process.env.NODE_ENV === 'production' ? null : '6c48d88a3273c0ea10957e9dbd2c789784f8541dbf2391bed73c8f54760116bf');
 
 function getTotpEncryptionKey() {
   if (process.env.TOTP_ENCRYPTION_KEY && process.env.TOTP_ENCRYPTION_KEY.trim() !== '') {
@@ -50,7 +52,7 @@ function decryptSecret(storedValue) {
     decrypted += decipher.final('utf8');
     return decrypted;
   } catch {
-    return storedValue;
+    return null;
   }
 }
 const TMP_DATA_FILE = process.platform === 'win32'
@@ -65,6 +67,22 @@ function getSupabase() {
     return createClient(url.trim(), key.trim(), { auth: { persistSession: false } });
   }
   return null;
+}
+
+function getAdminStateSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key || !url.trim() || !key.trim()) return null;
+  return createClient(url.trim(), key.trim(), { auth: { persistSession: false } });
+}
+
+function hasDurableAdminStateStore() {
+  return Boolean(
+    process.env.SUPABASE_URL &&
+    process.env.SUPABASE_URL.trim() &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY.trim()
+  );
 }
 
 // Configuração padrão do site
@@ -369,6 +387,178 @@ function saveStore(store) {
   }
 }
 
+// O filesystem do runtime serverless não é durável; o estado de autenticação usa Supabase.
+async function syncWithSupabase(store) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) return store;
+  const { data, error } = await supabase
+    .from('configuracoes_site')
+    .select('configuracao')
+    .eq('id', true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Falha ao ler o estado de segurança do administrador: ${error.message}`);
+  }
+
+  const persistedState = data?.configuracao?.admin_security_state;
+  if (persistedState) {
+    const state = persistedState;
+    if (state.admin_id !== undefined && Number(state.admin_id) !== Number(store.admin.id)) {
+      throw new Error('O estado de segurança persistido pertence a outro administrador.');
+    }
+    if (state.email && String(state.email).toLowerCase() !== String(store.admin.email).toLowerCase()) {
+      throw new Error('O estado de segurança persistido não corresponde ao e-mail administrativo configurado.');
+    }
+    for (const key of [
+      'two_factor_enabled',
+      'two_factor_secret',
+      'two_factor_temp_secret',
+      'senha_hash',
+      'token_version',
+      'last_totp_step',
+      'last_totp_code',
+      'last_totp_time',
+      'failed_login_attempts'
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(state, key)) {
+        store.admin[key] = state[key];
+      }
+    }
+  }
+  return store;
+}
+
+async function persistSecurityStateToSupabase(admin) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY não está configurada para persistir o estado administrativo.');
+  }
+
+  const { data: currentRow, error: readError } = await supabase
+    .from('configuracoes_site')
+    .select('configuracao')
+    .eq('id', true)
+    .maybeSingle();
+
+  if (readError) {
+    throw new Error(`Falha ao ler as configurações antes de salvar o estado de segurança: ${readError.message}`);
+  }
+
+  const currentConfig = currentRow?.configuracao || {};
+  if (typeof currentConfig !== 'object' || Array.isArray(currentConfig)) {
+    throw new Error('As configurações persistidas no Supabase possuem um formato inválido.');
+  }
+
+  const { error } = await supabase
+    .from('configuracoes_site')
+    .upsert({
+      id: true,
+      configuracao: {
+        ...currentConfig,
+        admin_security_state: {
+          admin_id: admin.id,
+          email: admin.email,
+          two_factor_enabled: admin.two_factor_enabled,
+          two_factor_secret: admin.two_factor_secret || null,
+          two_factor_temp_secret: admin.two_factor_temp_secret || null,
+          senha_hash: admin.senha_hash,
+          token_version: Number(admin.token_version || 1),
+          last_totp_step: admin.last_totp_step ?? null,
+          last_totp_code: admin.last_totp_code || null,
+          last_totp_time: admin.last_totp_time || null,
+          failed_login_attempts: admin.failed_login_attempts || {},
+          atualizado_em: new Date().toISOString()
+        }
+      }
+    }, { onConflict: 'id' });
+
+  if (error) {
+    throw new Error(`Falha ao persistir o estado de segurança do administrador: ${error.message}`);
+  }
+}
+
+async function persistAdminStateOrRespond(res, admin) {
+  try {
+    await persistSecurityStateToSupabase(admin);
+    return true;
+  } catch (error) {
+    console.error('Falha ao persistir o estado administrativo:', error.message);
+    res.status(503).json({ error: 'Não foi possível salvar o estado de segurança. Tente novamente.' });
+    return false;
+  }
+}
+
+function getAdminLoginKey(ip) {
+  return crypto.createHash('sha256').update(String(ip || 'unknown')).digest('hex');
+}
+
+function getRequestIp(req) {
+  return req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function checkAdminLoginThrottle(ip, admin) {
+  const key = getAdminLoginKey(ip);
+  const attempts = admin.failed_login_attempts || {};
+  const record = attempts[key];
+  if (!record) return { allowed: true };
+  if (record.lockedUntil && record.lockedUntil > Date.now()) {
+    return { allowed: false, minutesLeft: Math.ceil((record.lockedUntil - Date.now()) / 60000) };
+  }
+  if (record.lockedUntil || Date.now() - record.firstAttempt > 15 * 60 * 1000) {
+    delete attempts[key];
+    admin.failed_login_attempts = attempts;
+  }
+  return { allowed: true };
+}
+
+async function recordFailedAdminLogin(ip, admin, res) {
+  const key = getAdminLoginKey(ip);
+  const attempts = { ...(admin.failed_login_attempts || {}) };
+  const now = Date.now();
+  for (const [storedKey, storedRecord] of Object.entries(attempts)) {
+    if (now - storedRecord.firstAttempt > 15 * 60 * 1000) delete attempts[storedKey];
+  }
+  const record = attempts[key] || { count: 0, firstAttempt: now };
+  record.count += 1;
+  record.lastAttempt = now;
+  if (record.count >= 5) record.lockedUntil = now + 15 * 60 * 1000;
+  attempts[key] = record;
+  const oldest = Object.entries(attempts)
+    .sort(([, left], [, right]) => left.lastAttempt - right.lastAttempt);
+  while (oldest.length > 100) {
+    const [expiredKey] = oldest.shift();
+    delete attempts[expiredKey];
+  }
+  admin.failed_login_attempts = attempts;
+  return persistAdminStateOrRespond(res, admin);
+}
+
+async function clearFailedAdminLogins(ip, admin, res) {
+  const key = getAdminLoginKey(ip);
+  const attempts = { ...admin.failed_login_attempts };
+  delete attempts[key];
+  admin.failed_login_attempts = attempts;
+  return persistAdminStateOrRespond(res, admin);
+}
+
+// Blacklist de tokens invalidados via logout
+const revokedTokens = new Set();
+
+function revokeToken(token) {
+  if (!token) return;
+  const clean = token.startsWith('Bearer ') ? token.slice(7).trim() : token.trim();
+  const hash = crypto.createHash('sha256').update(clean).digest('hex');
+  revokedTokens.add(hash);
+}
+
+function isTokenRevoked(token) {
+  if (!token) return false;
+  const clean = token.startsWith('Bearer ') ? token.slice(7).trim() : token.trim();
+  const hash = crypto.createHash('sha256').update(clean).digest('hex');
+  return revokedTokens.has(hash);
+}
+
 // Helper para ler body JSON ou multipart
 function parseRequestBody(req) {
   return new Promise((resolve) => {
@@ -433,15 +623,90 @@ function parseRequestBody(req) {
 }
 
 // Helper para verificar token JWT
-function verifyAuth(req) {
+function verifyAuth(req, store = null) {
   const authHeader = req.headers['authorization'] || '';
   if (!authHeader.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7).trim();
+
+  if (isTokenRevoked(token)) return null;
+
   try {
-    return jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (!store?.admin || decoded.scope !== 'admin') return null;
+    if (Number(decoded.id) !== Number(store.admin.id)) return null;
+    if (decoded.token_version === undefined) return null;
+    if (Number(decoded.token_version) !== Number(store.admin.token_version || 1)) return null;
+    return decoded;
   } catch {
     return null;
   }
+}
+
+// Helper para verificar token de cliente homologado
+function verifyClienteAuth(req) {
+  const authHeader = req.headers['authorization'] || '';
+  if (!authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice(7).trim();
+
+  if (isTokenRevoked(token)) return null;
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.scope !== 'cliente') return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeClienteData(sol) {
+  if (!sol) return null;
+  let dias = sol.dias_funcionamento;
+  let horarios = sol.horarios_funcionamento;
+  let servicos = sol.servicos_desejados;
+
+  try { if (typeof dias === 'string') dias = JSON.parse(dias); } catch {}
+  try { if (typeof horarios === 'string') horarios = JSON.parse(horarios); } catch {}
+  try { if (typeof servicos === 'string') servicos = JSON.parse(servicos); } catch {}
+
+  let pix1 = sol.pix_1;
+  let conta1 = sol.conta_1;
+  if (pix1 && pix1.length > 6) pix1 = pix1.slice(0, 3) + '••••' + pix1.slice(-3);
+  if (conta1 && conta1.length > 3) conta1 = '••••-' + conta1.slice(-2);
+
+  return {
+    id: sol.id,
+    protocolo: sol.protocolo,
+    cnpj: sol.cnpj,
+    razao_social: sol.razao_social,
+    nome_fantasia: sol.nome_fantasia,
+    tipo_comercio: sol.tipo_comercio,
+    cep: sol.cep,
+    estado: sol.estado,
+    cidade: sol.cidade,
+    bairro: sol.bairro,
+    rua: sol.rua,
+    numero: sol.numero,
+    complemento: sol.complemento,
+    latitude: sol.latitude,
+    longitude: sol.longitude,
+    nome_responsavel: sol.nome_responsavel,
+    telefone: sol.telefone,
+    email: sol.email,
+    banco_1: sol.banco_1,
+    agencia_1: sol.agencia_1,
+    conta_1: conta1,
+    tipo_conta_1: sol.tipo_conta_1,
+    pix_1: pix1,
+    dias_funcionamento: dias,
+    horarios_funcionamento: horarios,
+    servicos_desejados: servicos,
+    status: sol.status,
+    tem_senha: Boolean(sol.senha_hash),
+    ultimo_login: sol.ultimo_login,
+    criado_em: sol.criado_em,
+    atualizado_em: sol.atualizado_em
+  };
 }
 
 // HANDLER PRINCIPAL VERCEL SERVERLESS
@@ -471,7 +736,28 @@ export default async function handler(req, res) {
   }
 
   const method = req.method.toUpperCase();
+  const requiresAdminState = pathname === 'config' && method === 'PUT'
+    || pathname === 'admin'
+    || pathname.startsWith('admin/');
+
+  if (requiresAdminState && !hasDurableAdminStateStore()) {
+    return res.status(503).json({
+      error: 'O armazenamento administrativo persistente não está configurado. Configure SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.'
+    });
+  }
+  if (requiresAdminState && !JWT_SECRET) {
+    return res.status(503).json({ error: 'JWT_SECRET deve ser configurado para autenticação administrativa em produção.' });
+  }
+
   const store = loadStore();
+  try {
+    await syncWithSupabase(store);
+  } catch (error) {
+    console.error('Falha ao carregar o estado administrativo persistente:', error.message);
+    if (requiresAdminState) {
+      return res.status(503).json({ error: 'Não foi possível carregar o estado de segurança do administrador.' });
+    }
+  }
 
   // 1. HEALTH CHECK
   if (pathname === 'health' || pathname === '') {
@@ -489,7 +775,7 @@ export default async function handler(req, res) {
       return res.status(200).json(store.config);
     }
     if (method === 'PUT') {
-      const user = verifyAuth(req);
+      const user = verifyAuth(req, store);
       if (!user) return res.status(401).json({ error: 'Acesso não autorizado. Sessão administrativa inválida.' });
 
       // Verificar se o administrador possui 2FA ativo
@@ -516,19 +802,22 @@ export default async function handler(req, res) {
       }
 
       const plainSecret = decryptSecret(store.admin.two_factor_secret);
-      const verification = verifySync({
-        token: twoFactorCode,
-        secret: plainSecret,
-        epochTolerance: 60
-      });
+      if (!plainSecret) {
+        return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
+      }
+      const matchedStep = getTotpStep(twoFactorCode, plainSecret);
 
-      if (!verification || !verification.valid) {
+      if (matchedStep === null || Number(store.admin.last_totp_step ?? -1) >= matchedStep) {
+        if (!await recordFailedAdminLogin(getRequestIp(req), store.admin, res)) return;
         return res.status(403).json({
-          error: 'Código 2FA incorreto ou expirado. Verifique o aplicativo Google Authenticator e tente novamente.',
+          error: 'Código 2FA incorreto, expirado ou já utilizado. Aguarde a próxima atualização e tente novamente.',
           require_2fa: true,
         });
       }
 
+      const ip = getRequestIp(req);
+      store.admin.last_totp_step = matchedStep;
+      if (!await clearFailedAdminLogins(ip, store.admin, res)) return;
       delete body.two_factor_code;
       store.config = { ...store.config, ...body };
       saveStore(store);
@@ -538,48 +827,58 @@ export default async function handler(req, res) {
 
   // 3. AUTENTICAÇÃO DO ADMINISTRADOR (/api/admin/login)
   if (pathname === 'admin/login' && method === 'POST') {
+    const ip = getRequestIp(req);
+    const throttle = checkAdminLoginThrottle(ip, store.admin);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
     const body = await parseRequestBody(req);
-    const emailInput = String(body.email || '').trim().toLowerCase();
-    const senhaInput = String(body.senha || '');
+    const { email, senha, pre_auth_token } = body || {};
 
-    const targetEmail = store.admin.email.toLowerCase();
-    const envPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
+    if (pre_auth_token) {
+      return res.status(400).json({ error: 'Use o endpoint de validação do segundo fator para concluir o login.' });
+    }
 
-    const isEmailValid = emailInput === targetEmail;
-    const isPasswordValid =
-      senhaInput === envPassword ||
-      senhaInput === 'Admin@2026' ||
+    const emailInput = String(email || '').trim().toLowerCase();
+    const senhaInput = String(senha || '');
+    const isEmailValid = emailInput === String(store.admin.email || '').toLowerCase();
+    const isPasswordValid = Boolean(store.admin.senha_hash) &&
       bcrypt.compareSync(senhaInput, store.admin.senha_hash);
 
     if (!isEmailValid || !isPasswordValid) {
+      if (!await recordFailedAdminLogin(ip, store.admin, res)) return;
       return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
     }
 
-    // Se o 2FA estiver ativado para o administrador
-    if (store.admin.two_factor_enabled === 1 || store.admin.two_factor_enabled === true) {
-      const codeInput = body.two_factor_code;
-      if (!codeInput) {
-        return res.status(200).json({
-          require_2fa: true,
+    if (Number(store.admin.two_factor_enabled) === 1) {
+      if (!store.admin.two_factor_secret) {
+        console.error(`Administrador ${store.admin.id} tem 2FA habilitado sem segredo persistido.`);
+        return res.status(503).json({ error: 'A configuração de segurança da conta está inconsistente.' });
+      }
+
+      const preAuthToken = jwt.sign(
+        {
+          id: store.admin.id,
           email: store.admin.email,
-          message: 'Autenticação em duas etapas requerida. Digite o código de 6 dígitos gerado pelo Google Authenticator.'
-        });
-      }
+          token_version: Number(store.admin.token_version || 1),
+          scope: '2fa_pending'
+        },
+        JWT_SECRET,
+        { expiresIn: '5m' }
+      );
 
-      const cleanCode = String(codeInput).replace(/\D/g, '');
-      const plainSecret = decryptSecret(store.admin.two_factor_secret);
-      const verification = verifySync({
-        token: cleanCode,
-        secret: plainSecret,
-        epochTolerance: 60
+      return res.status(200).json({
+        require_2fa: true,
+        pre_auth_token: preAuthToken,
+        email: store.admin.email,
+        message: 'Autenticação em duas etapas requerida. Digite o código de 6 dígitos gerado pelo aplicativo autenticador.'
       });
-
-      if (!verification || !verification.valid) {
-        return res.status(401).json({
-          error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
-        });
-      }
     }
+
+    if (!await clearFailedAdminLogins(ip, store.admin, res)) return;
 
     const token = jwt.sign(
       {
@@ -587,6 +886,8 @@ export default async function handler(req, res) {
         email: store.admin.email,
         nome: store.admin.nome,
         permissao: store.admin.permissao,
+        scope: 'admin',
+        token_version: store.admin.token_version || 1,
         two_factor_enabled: Boolean(store.admin.two_factor_enabled)
       },
       JWT_SECRET,
@@ -606,9 +907,116 @@ export default async function handler(req, res) {
     });
   }
 
+  // 3.1 VALIDAÇÃO DEDICADA DE 2FA NO LOGIN (/api/admin/2fa/verify-login)
+  if (pathname === 'admin/2fa/verify-login' && method === 'POST') {
+    const ip = getRequestIp(req);
+    const throttle = checkAdminLoginThrottle(ip, store.admin);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
+    const body = await parseRequestBody(req);
+    const { pre_auth_token, two_factor_code, code } = body || {};
+    const totpInput = two_factor_code || code;
+
+    if (!pre_auth_token) {
+      return res.status(400).json({ error: 'Token de autenticação intermediário é obrigatório.' });
+    }
+
+    if (!totpInput) {
+      return res.status(400).json({ error: 'Código de 6 dígitos do Google Authenticator é obrigatório.' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(pre_auth_token, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Token temporário expirado ou inválido. Realize login novamente com suas credenciais.' });
+    }
+
+    if (
+      decoded.scope !== '2fa_pending' ||
+      Number(decoded.id) !== Number(store.admin.id) ||
+      Number(decoded.token_version) !== Number(store.admin.token_version || 1)
+    ) {
+      return res.status(401).json({ error: 'Token de autenticação com escopo inválido.' });
+    }
+
+    if (Number(store.admin.two_factor_enabled) !== 1 || !store.admin.two_factor_secret) {
+      return res.status(401).json({ error: 'O 2FA não está ativo para esta conta.' });
+    }
+
+    const cleanCode = String(totpInput).replace(/\D/g, '');
+    const plainSecret = decryptSecret(store.admin.two_factor_secret);
+    if (!plainSecret) {
+      console.error(`Não foi possível descriptografar o segredo 2FA do administrador ${store.admin.id}.`);
+      return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
+    }
+
+    const matchedStep = getTotpStep(cleanCode, plainSecret);
+    const lastTotpStep = Number(store.admin.last_totp_step ??
+      (store.admin.last_totp_time ? Math.floor(store.admin.last_totp_time / 30_000) : -1));
+    if (matchedStep === null || lastTotpStep >= matchedStep) {
+      if (!await recordFailedAdminLogin(ip, store.admin, res)) return;
+      return res.status(401).json({
+        error: 'Código do autenticador inválido, expirado ou já utilizado. Aguarde a próxima atualização e tente novamente.'
+      });
+    }
+
+    store.admin.last_totp_step = matchedStep;
+    saveStore(store);
+    if (!await clearFailedAdminLogins(ip, store.admin, res)) return;
+
+    const token = jwt.sign(
+      {
+        id: store.admin.id,
+        email: store.admin.email,
+        nome: store.admin.nome,
+        permissao: store.admin.permissao,
+        scope: 'admin',
+        token_version: store.admin.token_version || 1,
+        two_factor_enabled: true
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    return res.status(200).json({
+      success: true,
+      token,
+      admin: {
+        id: store.admin.id,
+        nome: store.admin.nome,
+        email: store.admin.email,
+        permissao: store.admin.permissao,
+        two_factor_enabled: true
+      }
+    });
+  }
+
+  // 3.2 LOGOUT E INVALIDAÇÃO DE SESSÃO (/api/admin/logout)
+  if (pathname === 'admin/logout' && method === 'POST') {
+    const user = verifyAuth(req, store);
+    if (!user) return res.status(401).json({ error: 'Sessão administrativa inválida.' });
+    const authHeader = req.headers['authorization'] || '';
+    if (authHeader.startsWith('Bearer ')) {
+      revokeToken(authHeader.slice(7).trim());
+    }
+    store.admin.token_version = (store.admin.token_version || 1) + 1;
+    saveStore(store);
+    if (!await persistAdminStateOrRespond(res, store.admin)) return;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Sessão administrativa encerrada com sucesso.'
+    });
+  }
+
   // 4. DADOS DA SESSÃO DO ADMINISTRADOR (/api/admin/me)
   if (pathname === 'admin/me' && method === 'GET') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Sessão expirada ou inválida' });
     return res.status(200).json({
       admin: {
@@ -623,7 +1031,7 @@ export default async function handler(req, res) {
 
   // 5. DASHBOARD DO ADMINISTRADOR (/api/admin/dashboard)
   if (pathname === 'admin/dashboard' && method === 'GET') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     const total = store.solicitacoes.length;
@@ -693,7 +1101,7 @@ export default async function handler(req, res) {
 
   // 5.1 LIVE CHECK EM TEMPO REAL (/api/admin/live-check)
   if (pathname === 'admin/live-check' && method === 'GET') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     const lastId = parseInt(urlObj.searchParams.get('last_id') || '0', 10);
@@ -708,25 +1116,41 @@ export default async function handler(req, res) {
 
   // 5.2 GOOGLE AUTHENTICATOR 2FA (/api/admin/2fa/*)
   if (pathname === 'admin/2fa/status' && method === 'GET') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
     const isEnabled = Boolean(Number(store.admin.two_factor_enabled) === 1 && store.admin.two_factor_secret);
-    return res.status(200).json({ enabled: isEnabled });
+    if (Number(store.admin.two_factor_enabled) === 1 && !store.admin.two_factor_secret) {
+      return res.status(503).json({ error: 'A configuração de segurança da conta está inconsistente.' });
+    }
+    const isPending = Boolean(!isEnabled && store.admin.two_factor_temp_secret);
+    return res.status(200).json({
+      enabled: isEnabled,
+      pending: isPending
+    });
   }
 
   if (pathname === 'admin/2fa/setup' && method === 'POST') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
-    if (store.admin.two_factor_enabled === 1 || store.admin.two_factor_enabled === true) {
+    if (Number(store.admin.two_factor_enabled) === 1) {
       return res.status(400).json({
         error: 'A autenticação em duas etapas já está ativa nesta conta. Para reconfigurar, desative-a primeiro na aba Segurança confirmando sua senha.'
       });
     }
 
-    const secret = generateSecret();
-    store.admin.two_factor_temp_secret = encryptSecret(secret);
-    saveStore(store);
+    let secret;
+    if (store.admin.two_factor_temp_secret) {
+      secret = decryptSecret(store.admin.two_factor_temp_secret);
+      if (!secret) {
+        return res.status(503).json({ error: 'Não foi possível recuperar a configuração pendente do autenticador.' });
+      }
+    } else {
+      secret = generateSecret();
+      store.admin.two_factor_temp_secret = encryptSecret(secret);
+      saveStore(store);
+      if (!await persistAdminStateOrRespond(res, store.admin)) return;
+    }
 
     const otpauthUrl = generateURI({
       issuer: 'Ponto de Coleta Admin',
@@ -754,8 +1178,19 @@ export default async function handler(req, res) {
   }
 
   if ((pathname === 'admin/2fa/verify-and-enable' || pathname === 'admin/2fa/verify') && method === 'POST') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
+    const ip = getRequestIp(req);
+    const throttle = checkAdminLoginThrottle(ip, store.admin);
+    if (!throttle.allowed) {
+      return res.status(429).json({
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado por segurança. Tente novamente em ${throttle.minutesLeft} minutos.`
+      });
+    }
+
+    if (Number(store.admin.two_factor_enabled) === 1) {
+      return res.status(409).json({ error: 'O 2FA já está ativado nesta conta.' });
+    }
 
     const body = await parseRequestBody(req);
     const tokenInput = String(body.token || body.code || '').replace(/\D/g, '');
@@ -769,13 +1204,13 @@ export default async function handler(req, res) {
     }
 
     const plainTempSecret = decryptSecret(store.admin.two_factor_temp_secret);
-    const verification = verifySync({
-      token: tokenInput,
-      secret: plainTempSecret,
-      epochTolerance: 30
-    });
+    if (!plainTempSecret) {
+      return res.status(503).json({ error: 'Não foi possível recuperar a configuração pendente do autenticador.' });
+    }
+    const matchedStep = getTotpStep(tokenInput, plainTempSecret);
 
-    if (!verification || !verification.valid) {
+    if (matchedStep === null) {
+      if (!await recordFailedAdminLogin(ip, store.admin, res)) return;
       return res.status(400).json({
         error: 'Código inválido ou incorreto. Certifique-se de digitar os 6 dígitos gerados no aplicativo Google Authenticator.'
       });
@@ -784,7 +1219,9 @@ export default async function handler(req, res) {
     store.admin.two_factor_enabled = 1;
     store.admin.two_factor_secret = encryptSecret(plainTempSecret);
     store.admin.two_factor_temp_secret = null;
+    store.admin.last_totp_step = matchedStep;
     saveStore(store);
+    if (!await clearFailedAdminLogins(ip, store.admin, res)) return;
 
     return res.status(200).json({
       success: true,
@@ -793,7 +1230,7 @@ export default async function handler(req, res) {
   }
 
   if (pathname === 'admin/2fa/disable' && method === 'POST') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     // Procedimento seguro de recuperação emergencial devidamente autorizado via chave de ambiente
@@ -812,7 +1249,9 @@ export default async function handler(req, res) {
     store.admin.two_factor_enabled = 0;
     store.admin.two_factor_secret = null;
     store.admin.two_factor_temp_secret = null;
+    store.admin.last_totp_step = null;
     saveStore(store);
+    if (!await persistAdminStateOrRespond(res, store.admin)) return;
 
     console.info(`[AUDIT] 2FA desativado mediante protocolo emergencial autorizado em ${new Date().toISOString()}`);
 
@@ -825,16 +1264,13 @@ export default async function handler(req, res) {
 
   // 6. ALTERAR SENHA ADMINISTRATIVA (/api/admin/password)
   if (pathname === 'admin/password' && method === 'PUT') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
     const body = await parseRequestBody(req);
     const { senha_atual, nova_senha, two_factor_code, code } = body || {};
 
-    const envPassword = process.env.ADMIN_PASSWORD || 'Admin@2026';
-    const isCurrentValid =
-      senha_atual === envPassword ||
-      senha_atual === 'Admin@2026' ||
-      bcrypt.compareSync(senha_atual, store.admin.senha_hash);
+    const isCurrentValid = Boolean(store.admin.senha_hash) &&
+      bcrypt.compareSync(String(senha_atual || ''), store.admin.senha_hash);
 
     if (!isCurrentValid) {
       return res.status(401).json({ error: 'A senha atual informada está incorreta.' });
@@ -844,7 +1280,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'A nova senha deve possuir no mínimo 8 caracteres.' });
     }
 
-    if (store.admin.two_factor_enabled === 1 && store.admin.two_factor_secret) {
+    if (Number(store.admin.two_factor_enabled) === 1) {
       const tokenInput = String(two_factor_code || code || '').replace(/\D/g, '');
       if (!tokenInput || tokenInput.length !== 6) {
         return res.status(400).json({
@@ -852,27 +1288,28 @@ export default async function handler(req, res) {
         });
       }
       const plainSecret = decryptSecret(store.admin.two_factor_secret);
-      const verification = verifySync({
-        token: tokenInput,
-        secret: plainSecret,
-        epochTolerance: 30
-      });
-      if (!verification || !verification.valid) {
+      if (!plainSecret) {
+        return res.status(503).json({ error: 'Não foi possível validar a configuração do autenticador.' });
+      }
+      const matchedStep = getTotpStep(tokenInput, plainSecret);
+      if (matchedStep === null || Number(store.admin.last_totp_step ?? -1) >= matchedStep) {
         return res.status(401).json({
-          error: 'Código do Google Authenticator inválido ou expirado. Verifique o relógio do seu celular e tente novamente.'
+          error: 'Código do autenticador inválido, expirado ou já utilizado. Aguarde a próxima atualização e tente novamente.'
         });
       }
+      store.admin.last_totp_step = matchedStep;
     }
 
     store.admin.senha_hash = bcrypt.hashSync(nova_senha, 10);
     saveStore(store);
+    if (!await persistAdminStateOrRespond(res, store.admin)) return;
     console.info(`[AUDIT] Senha administrativa alterada com sucesso em ${new Date().toISOString()}`);
     return res.status(200).json({ success: true, message: 'Senha administrativa atualizada com sucesso!' });
   }
 
   // 7. EXPORTAÇÃO CSV (/api/admin/export/csv)
   if (pathname === 'admin/export/csv' && method === 'GET') {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     const escapeCsv = (str) => {
@@ -904,7 +1341,7 @@ export default async function handler(req, res) {
   if (pathname === 'solicitacoes') {
     // GET: Listar com filtros e paginação
     if (method === 'GET') {
-      const user = verifyAuth(req);
+      const user = verifyAuth(req, store);
       if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
       const q = (urlObj.searchParams.get('q') || '').trim().toLowerCase();
@@ -1063,7 +1500,7 @@ export default async function handler(req, res) {
   // 9. OPERAÇÕES EM SOLICITAÇÃO ESPECÍFICA (/api/solicitacoes/:id, /status, /observacoes)
   const solMatch = pathname.match(/^solicitacoes\/(\d+)(?:\/(status|observacoes))?$/);
   if (solMatch) {
-    const user = verifyAuth(req);
+    const user = verifyAuth(req, store);
     if (!user) return res.status(401).json({ error: 'Não autorizado' });
 
     const id = parseInt(solMatch[1], 10);
@@ -1124,6 +1561,231 @@ export default async function handler(req, res) {
       saveStore(store);
       return res.status(200).json({ success: true, message: 'Registro excluído.' });
     }
+  }
+
+  // 10. ROTAS DO CLIENTE / PARCEIRO HOMOLOGADO (/api/cliente/*)
+  if (pathname === 'cliente/login' && method === 'POST') {
+    const body = await parseRequestBody(req);
+    const { identifier, cnpj, senha, password, protocolo } = body || {};
+    const rawCnpj = (cnpj || identifier || '').toString().trim();
+    const cleanCnpjDigits = rawCnpj.replace(/\D/g, '');
+    const cleanEmail = rawCnpj.toLowerCase();
+    const cleanProtocolo = (protocolo || '').toString().trim().toUpperCase();
+    const inputPassword = senha || password;
+
+    if (!cleanCnpjDigits && !cleanEmail && !cleanProtocolo) {
+      return res.status(400).json({ error: 'Informe seu CNPJ, E-mail ou Protocolo para continuar.' });
+    }
+
+    const sol = store.solicitacoes.find((s) => {
+      const sCnpjDigits = (s.cnpj || '').replace(/\D/g, '');
+      const sEmail = (s.email || '').toLowerCase().trim();
+      const sProto = (s.protocolo || '').toUpperCase().trim();
+      return (
+        (cleanCnpjDigits && sCnpjDigits === cleanCnpjDigits) ||
+        (cleanEmail && sEmail === cleanEmail) ||
+        (cleanProtocolo && sProto === cleanProtocolo)
+      );
+    });
+
+    if (!sol) {
+      return res.status(404).json({
+        error: 'Nenhum cadastro encontrado com os dados informados. Verifique os dados digitados ou realize um novo cadastro.'
+      });
+    }
+
+    if (sol.status !== 'Aprovado') {
+      const isAnalise = ['Recebido', 'Em análise', 'Aguardando contato', 'Documentação pendente'].includes(sol.status);
+      if (isAnalise) {
+        return res.status(403).json({
+          error: 'Cadastro em análise.',
+          status: sol.status,
+          protocolo: sol.protocolo,
+          nome_fantasia: sol.nome_fantasia,
+          message: `Sua solicitação (Protocolo: ${sol.protocolo}) foi recebida e está em fase de avaliação logística. O acesso ao portal do parceiro é liberado assim que seu ponto for Aprovado.`
+        });
+      }
+
+      if (sol.status === 'Rejeitado') {
+        return res.status(403).json({
+          error: 'Solicitação não aprovada.',
+          status: 'Rejeitado',
+          protocolo: sol.protocolo,
+          message: 'Seu cadastro não foi homologado para ponto de coleta na nossa rede.'
+        });
+      }
+
+      return res.status(403).json({
+        error: `Status atual: ${sol.status}. O acesso é restrito a estabelecimentos homologados.`,
+        status: sol.status,
+        protocolo: sol.protocolo
+      });
+    }
+
+    // Acesso com Protocolo
+    if (cleanProtocolo) {
+      if ((sol.protocolo || '').toUpperCase().trim() !== cleanProtocolo) {
+        return res.status(401).json({ error: 'Protocolo incorreto para este estabelecimento.' });
+      }
+    } else {
+      // Acesso com Senha
+      if (!sol.senha_hash) {
+        return res.status(400).json({
+          require_password_setup: true,
+          status: 'Aprovado',
+          protocolo: sol.protocolo,
+          nome_fantasia: sol.nome_fantasia,
+          message: 'Parabéns, seu cadastro foi Aprovado! Como este é seu primeiro acesso, cadastre sua senha usando seu protocolo.'
+        });
+      }
+
+      if (!inputPassword) {
+        return res.status(400).json({ error: 'Informe sua senha de acesso.' });
+      }
+
+      const isMatch = bcrypt.compareSync(inputPassword, sol.senha_hash);
+      if (!isMatch) {
+        return res.status(401).json({
+          error: 'Senha incorreta. Caso tenha esquecido, você pode redefinir usando seu número de protocolo.'
+        });
+      }
+    }
+
+    sol.ultimo_login = new Date().toISOString();
+    saveStore(store);
+
+    const token = jwt.sign(
+      {
+        id: sol.id,
+        scope: 'cliente',
+        protocolo: sol.protocolo,
+        cnpj: sol.cnpj,
+        razao_social: sol.razao_social,
+        nome_fantasia: sol.nome_fantasia,
+        nome_responsavel: sol.nome_responsavel,
+        email: sol.email
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    return res.status(200).json({
+      success: true,
+      token,
+      cliente: sanitizeClienteData(sol)
+    });
+  }
+
+  if (pathname === 'cliente/primeiro-acesso' && method === 'POST') {
+    const body = await parseRequestBody(req);
+    const { cnpj, identifier, protocolo, nova_senha, senha } = body || {};
+    const rawCnpj = (cnpj || identifier || '').toString().trim();
+    const cleanCnpjDigits = rawCnpj.replace(/\D/g, '');
+    const cleanProtocolo = (protocolo || '').toString().trim().toUpperCase();
+    const newPass = nova_senha || senha;
+
+    if (!cleanCnpjDigits || !cleanProtocolo) {
+      return res.status(400).json({ error: 'CNPJ e Protocolo são obrigatórios para validar sua identidade.' });
+    }
+
+    if (!newPass || newPass.length < 6) {
+      return res.status(400).json({ error: 'A nova senha deve ter no mínimo 6 caracteres.' });
+    }
+
+    const sol = store.solicitacoes.find((s) => {
+      const sCnpjDigits = (s.cnpj || '').replace(/\D/g, '');
+      const sProto = (s.protocolo || '').toUpperCase().trim();
+      return sCnpjDigits === cleanCnpjDigits && sProto === cleanProtocolo;
+    });
+
+    if (!sol) {
+      return res.status(404).json({ error: 'Nenhum cadastro encontrado com este CNPJ e Protocolo.' });
+    }
+
+    if (sol.status !== 'Aprovado') {
+      return res.status(403).json({
+        error: 'Apenas cadastros aprovados podem criar senha de acesso ao portal.',
+        status: sol.status
+      });
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    sol.senha_hash = bcrypt.hashSync(newPass, salt);
+    sol.ultimo_login = new Date().toISOString();
+    sol.atualizado_em = new Date().toISOString();
+    saveStore(store);
+
+    const token = jwt.sign(
+      {
+        id: sol.id,
+        scope: 'cliente',
+        protocolo: sol.protocolo,
+        cnpj: sol.cnpj,
+        razao_social: sol.razao_social,
+        nome_fantasia: sol.nome_fantasia,
+        nome_responsavel: sol.nome_responsavel,
+        email: sol.email
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Senha cadastrada com sucesso! Bem-vindo ao Portal do Parceiro.',
+      token,
+      cliente: sanitizeClienteData(sol)
+    });
+  }
+
+  if (pathname === 'cliente/me' && method === 'GET') {
+    const cliente = verifyClienteAuth(req);
+    if (!cliente) return res.status(401).json({ error: 'Sessão expirada ou não autorizada.' });
+
+    const sol = store.solicitacoes.find((s) => s.id === cliente.id);
+    if (!sol) return res.status(404).json({ error: 'Ponto de coleta não encontrado.' });
+    if (sol.status !== 'Aprovado') {
+      return res.status(403).json({ error: 'Cadastro não mais homologado.', status: sol.status });
+    }
+
+    return res.status(200).json({ cliente: sanitizeClienteData(sol) });
+  }
+
+  if (pathname === 'cliente/alterar-senha' && method === 'POST') {
+    const cliente = verifyClienteAuth(req);
+    if (!cliente) return res.status(401).json({ error: 'Sessão expirada ou não autorizada.' });
+
+    const body = await parseRequestBody(req);
+    const { senha_atual, nova_senha } = body || {};
+
+    if (!nova_senha || nova_senha.length < 6) {
+      return res.status(400).json({ error: 'A nova senha deve ter no mínimo 6 caracteres.' });
+    }
+
+    const sol = store.solicitacoes.find((s) => s.id === cliente.id);
+    if (!sol) return res.status(404).json({ error: 'Cadastro não encontrado.' });
+
+    if (sol.senha_hash) {
+      if (!senha_atual) return res.status(400).json({ error: 'Informe a senha atual.' });
+      if (!bcrypt.compareSync(senha_atual, sol.senha_hash)) {
+        return res.status(401).json({ error: 'Senha atual incorreta.' });
+      }
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    sol.senha_hash = bcrypt.hashSync(nova_senha, salt);
+    sol.atualizado_em = new Date().toISOString();
+    saveStore(store);
+
+    return res.status(200).json({ success: true, message: 'Senha alterada com sucesso!' });
+  }
+
+  if (pathname === 'cliente/logout' && method === 'POST') {
+    const authHeader = req.headers['authorization'] || '';
+    if (authHeader.startsWith('Bearer ')) {
+      revokeToken(authHeader.slice(7).trim());
+    }
+    return res.status(200).json({ success: true, message: 'Sessão do parceiro encerrada com sucesso.' });
   }
 
   // Rota desconhecida

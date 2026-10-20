@@ -58,7 +58,9 @@ export const AdminConfiguracoes: React.FC = () => {
 
   // 2FA State
   const [twoFactorEnabled, setTwoFactorEnabled] = useState<boolean>(Boolean(admin?.two_factor_enabled));
+  const [twoFactorPending, setTwoFactorPending] = useState(false);
   const [twoFactorLoading, setTwoFactorLoading] = useState<boolean>(true);
+  const [twoFactorStatusError, setTwoFactorStatusError] = useState('');
   const [setupData, setSetupData] = useState<{ secret: string; qr_code: string; otpauth_url: string } | null>(null);
   const [setupLoading, setSetupLoading] = useState(false);
   const [verifyToken, setVerifyToken] = useState('');
@@ -90,13 +92,13 @@ export const AdminConfiguracoes: React.FC = () => {
       const res = await fetch2FAStatus();
       const isEnabled = Boolean(res.enabled);
       setTwoFactorEnabled(isEnabled);
+      setTwoFactorPending(Boolean(res.pending) && !isEnabled);
+      setTwoFactorStatusError('');
       if (isEnabled) {
         setSetupData(null);
       }
-    } catch {
-      if (admin) {
-        setTwoFactorEnabled(Boolean(admin.two_factor_enabled));
-      }
+    } catch (err) {
+      setTwoFactorStatusError(err instanceof Error ? err.message : 'Não foi possível consultar o status do 2FA no servidor.');
     } finally {
       setTwoFactorLoading(false);
     }
@@ -105,12 +107,6 @@ export const AdminConfiguracoes: React.FC = () => {
   useEffect(() => {
     check2FAStatus();
   }, [activeTab]);
-
-  useEffect(() => {
-    if (admin) {
-      setTwoFactorEnabled(Boolean(admin.two_factor_enabled));
-    }
-  }, [admin]);
 
   const handleStartSetup2FA = async () => {
     setSetupLoading(true);
@@ -140,6 +136,7 @@ export const AdminConfiguracoes: React.FC = () => {
       await refreshAdmin();
       await check2FAStatus();
       setTwoFactorEnabled(true);
+      setTwoFactorPending(false);
       setSetupData(null);
       setVerifyToken('');
       setTwoFactorSuccess('Autenticação de 2 Fatores (Google Authenticator) ativada e salva com sucesso!');
@@ -389,7 +386,7 @@ export const AdminConfiguracoes: React.FC = () => {
             <span className="text-xs text-slate-500 font-semibold hidden sm:inline-block">Status de Segurança:</span>
             <span className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${twoFactorEnabled ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'}`}>
               {twoFactorEnabled ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> : <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />}
-              <span>{twoFactorEnabled ? '2FA Ativo' : '2FA Desativado'}</span>
+              <span>{twoFactorEnabled ? '2FA Ativo' : twoFactorPending ? 'Configuração pendente' : '2FA Desativado'}</span>
             </span>
           </div>
         )}
@@ -902,6 +899,18 @@ export const AdminConfiguracoes: React.FC = () => {
               <Loader2 className="w-8 h-8 text-orange-600 animate-spin" />
               <span className="text-xs font-semibold text-slate-600">Verificando status de segurança do 2FA no servidor...</span>
             </div>
+          ) : twoFactorStatusError ? (
+            <div role="alert" className="p-5 bg-red-50 rounded-2xl border border-red-200 text-sm text-red-800">
+              <div className="font-bold">Não foi possível verificar o status do autenticador.</div>
+              <p className="mt-1 text-xs">{twoFactorStatusError}</p>
+              <button
+                type="button"
+                onClick={check2FAStatus}
+                className="mt-3 px-4 py-2 bg-red-700 hover:bg-red-800 text-white text-xs font-bold rounded-lg"
+              >
+                Tentar novamente
+              </button>
+            </div>
           ) : twoFactorEnabled ? (
             <div className="p-6 bg-gradient-to-br from-emerald-50 to-teal-50/50 rounded-2xl border border-emerald-200 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -949,13 +958,17 @@ export const AdminConfiguracoes: React.FC = () => {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-black text-slate-900 text-base">Google Authenticator Desativado</span>
+                        <span className="font-black text-slate-900 text-base">
+                          {twoFactorPending ? 'Configuração do autenticador pendente' : 'Google Authenticator Desativado'}
+                        </span>
                         <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-                          Proteção Básica
+                          {twoFactorPending ? 'Aguardando confirmação' : 'Proteção Básica'}
                         </span>
                       </div>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        O login atual requer apenas e-mail e senha. Recomendamos ativar o 2FA para blindar o acesso ao painel.
+                        {twoFactorPending
+                          ? 'A configuração já foi iniciada. Continue com o mesmo QR Code e confirme um código válido para ativar o 2FA.'
+                          : 'O login atual requer apenas e-mail e senha. Recomendamos ativar o 2FA para blindar o acesso ao painel.'}
                       </p>
                     </div>
                   </div>
@@ -976,7 +989,7 @@ export const AdminConfiguracoes: React.FC = () => {
                         ) : (
                           <>
                             <QrCode className="w-4 h-4" />
-                            <span>Configurar com QR Code</span>
+                            <span>{twoFactorPending ? 'Continuar configuração' : 'Configurar com QR Code'}</span>
                           </>
                         )}
                       </button>

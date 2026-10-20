@@ -7,6 +7,7 @@ import { initDatabase } from './database.js';
 import solicitacoesRoutes from './routes/solicitacoes.js';
 import configRoutes from './routes/config.js';
 import adminRoutes from './routes/admin.js';
+import clienteRoutes from './routes/cliente.js';
 
 dotenv.config();
 
@@ -75,6 +76,7 @@ app.use('/uploads/:filename', authenticateToken, (req, res) => {
 app.use('/api/solicitacoes', solicitacoesRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/cliente', clienteRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

@@ -12,7 +12,12 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'database.sqlite');
+const dbPath = process.env.COLETA_DATABASE_PATH
+  ? path.resolve(process.env.COLETA_DATABASE_PATH)
+  : path.join(dataDir, 'database.sqlite');
+if (process.env.COLETA_DATABASE_PATH) {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+}
 const db = new Database(dbPath);
 
 // Enable WAL mode and foreign keys for high performance and integrity
@@ -65,6 +70,8 @@ export function initDatabase() {
       origem_outro TEXT,
       status TEXT NOT NULL DEFAULT 'Recebido',
       observacoes_internas TEXT,
+      senha_hash TEXT,
+      ultimo_login TEXT,
       criado_em TEXT NOT NULL,
       atualizado_em TEXT NOT NULL
     );
@@ -129,7 +136,9 @@ export function initDatabase() {
       criado_em TEXT NOT NULL,
       two_factor_secret TEXT,
       two_factor_enabled INTEGER DEFAULT 0,
-      two_factor_temp_secret TEXT
+      two_factor_temp_secret TEXT,
+      token_version INTEGER DEFAULT 1,
+      last_totp_step INTEGER
     );
   `);
 
@@ -148,6 +157,44 @@ export function initDatabase() {
   if (!adminCols.some(col => col.name === 'two_factor_temp_secret')) {
     try {
       db.exec(`ALTER TABLE administradores ADD COLUMN two_factor_temp_secret TEXT;`);
+    } catch {}
+  }
+  if (!adminCols.some(col => col.name === 'token_version')) {
+    try {
+      db.exec(`ALTER TABLE administradores ADD COLUMN token_version INTEGER DEFAULT 1;`);
+    } catch {}
+  }
+  if (!adminCols.some(col => col.name === 'last_totp_code')) {
+    try {
+      db.exec(`ALTER TABLE administradores ADD COLUMN last_totp_code TEXT;`);
+    } catch {}
+  }
+  if (!adminCols.some(col => col.name === 'last_totp_time')) {
+    try {
+      db.exec(`ALTER TABLE administradores ADD COLUMN last_totp_time INTEGER;`);
+    } catch {}
+  }
+  if (!adminCols.some(col => col.name === 'last_totp_step')) {
+    db.exec('ALTER TABLE administradores ADD COLUMN last_totp_step INTEGER;');
+  }
+
+  db.exec(`
+    UPDATE administradores
+    SET last_totp_step = CAST(last_totp_time / 30000 AS INTEGER)
+    WHERE last_totp_step IS NULL
+      AND last_totp_time >= 1000000000000;
+  `);
+
+  // Migration segura para tabela solicitacoes (acesso de clientes homologados)
+  const solCols = db.prepare("PRAGMA table_info(solicitacoes)").all();
+  if (!solCols.some(col => col.name === 'senha_hash')) {
+    try {
+      db.exec(`ALTER TABLE solicitacoes ADD COLUMN senha_hash TEXT;`);
+    } catch {}
+  }
+  if (!solCols.some(col => col.name === 'ultimo_login')) {
+    try {
+      db.exec(`ALTER TABLE solicitacoes ADD COLUMN ultimo_login TEXT;`);
     } catch {}
   }
 

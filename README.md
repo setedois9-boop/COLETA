@@ -101,26 +101,41 @@ npm run dev
 
 ---
 
-## Publicar a interface na Vercel
+## Publicação
 
-O frontend pode ser publicado como um site estático conectado ao repositório GitHub:
+Há duas opções de hospedagem:
 
-1. Importe o repositório na Vercel e defina `client` como **Root Directory**.
-2. Use `npm run build` como comando de build e `dist` como diretório de saída.
-3. O arquivo `client/vercel.json` mantém as rotas do React Router funcionando ao atualizar ou acessar links diretamente.
+- **Frontend estático separado:** publique `client` e configure `VITE_API_URL` para apontar a um backend Express em execução. O SQLite local só é persistente se o host mantiver o arquivo do banco entre reinicializações.
+- **Projeto completo na Vercel:** mantenha a raiz do repositório como diretório do projeto. O `vercel.json` publica `api/index.js` como API serverless e encaminha as rotas do frontend. Como o disco e a memória de uma função serverless não são persistentes, o painel administrativo exige Supabase com armazenamento de estado persistente.
 
-**Limitação desta publicação:** a Vercel hospeda somente a interface. O cadastro, o login administrativo, as configurações e os uploads dependem do backend Express e do armazenamento persistente; esses recursos não funcionarão no site publicado até que o backend seja hospedado e conectado a um banco e armazenamento persistentes.
+Para a API serverless, configure no provedor:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` (somente no servidor; nunca use prefixo `VITE_`)
+- `JWT_SECRET` aleatório, privado e estável
+- `TOTP_ENCRYPTION_KEY` aleatória e estável antes de habilitar o autenticador; se omitida, a chave é derivada de `JWT_SECRET`
+
+A API grava o estado administrativo, incluindo o segredo TOTP cifrado, dentro da coluna JSONB `configuracoes_site.configuracao`, sob a propriedade `admin_security_state`. A implementação preserva as demais propriedades da configuração do site. Para projetos Supabase já existentes, o script de migração consulta e atualiza a tabela singleton identificada por `id = true`. Se as credenciais do banco não estiverem configuradas ou a leitura/gravação falhar, as rotas administrativas retornam erro em vez de aparentar sucesso usando o armazenamento efêmero da função.
+
+O banco SQLite de desenvolvimento e o estado serverless do Supabase são armazenamentos distintos. Para transferir com segurança a conta local existente, configure as mesmas chaves usadas pela API e execute primeiro a simulação; o script valida a identidade da conta e nunca sobrescreve um estado Supabase existente sem confirmação explícita:
+
+```bash
+node server/src/scripts/migrateAdminSecurityToSupabase.js
+node server/src/scripts/migrateAdminSecurityToSupabase.js --execute
+```
+
+Se já existir o estado `configuracao.admin_security_state`, revise-o antes de substituí-lo; a opção destrutiva exige também `--replace`. Preserve as mesmas chaves de cifragem entre as migrações; trocar `JWT_SECRET` ou `TOTP_ENCRYPTION_KEY` sem recriptografar os segredos existentes torna o autenticador irrecuperável.
 
 ---
 
 ## 🔐 Credenciais do Primeiro Administrador
 
-Ao iniciar o sistema pela primeira vez, o banco de dados cria automaticamente o superadministrador padrão:
+Em desenvolvimento local, se não houver um administrador existente, o banco de dados cria o superadministrador padrão:
 
 - **E-mail:** `admin@pontodecoleta.com.br`
 - **Senha:** `Admin@2026`
 
-*(A senha pode ser alterada diretamente no banco ou nas configurações).*
+*Não mantenha essas credenciais em produção. Defina credenciais fortes por ambiente e altere a senha inicial.*
 
 ---
 
