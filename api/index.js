@@ -476,6 +476,152 @@ async function syncWithSupabase(store) {
   return store;
 }
 
+// Solicitações (cadastros de clientes): tabelas `solicitacoes` e `arquivos_solicitacao` do Supabase.
+// O registro completo fica em `solicitacoes.dados`; campos bancários são cifrados (AES-256-GCM).
+const SOLICITACAO_SENSITIVE_FIELDS = [
+  'banco_1', 'agencia_1', 'conta_1', 'tipo_conta_1', 'pix_1',
+  'banco_2', 'agencia_2', 'conta_2', 'tipo_conta_2', 'pix_2'
+];
+
+function setSolicitacaoUuid(sol, uuid) {
+  Object.defineProperty(sol, '__uuid', { value: uuid, enumerable: false, writable: true, configurable: true });
+  return sol;
+}
+
+function rowToSolicitacao(row) {
+  const dados = { ...(row.dados || {}) };
+  for (const field of SOLICITACAO_SENSITIVE_FIELDS) {
+    if (typeof dados[field] === 'string') dados[field] = decryptSecret(dados[field]);
+  }
+  const sol = {
+    ...dados,
+    id: Number(dados.legacy_id),
+    protocolo: row.protocolo,
+    cnpj: dados.cnpj || row.cnpj,
+    razao_social: row.razao_social,
+    nome_fantasia: row.nome_fantasia,
+    tipo_comercio: row.tipo_comercio,
+    cidade: row.cidade,
+    estado: row.estado,
+    telefone: dados.telefone ?? row.telefone,
+    email: row.email,
+    status: row.status,
+    observacoes_internas: row.observacoes_internas,
+    criado_em: row.criado_em,
+    atualizado_em: row.atualizado_em,
+    arquivos: []
+  };
+  delete sol.legacy_id;
+  return setSolicitacaoUuid(sol, row.id);
+}
+
+function solicitacaoToRow(sol) {
+  const dados = { ...sol, legacy_id: sol.id };
+  delete dados.arquivos;
+  for (const field of SOLICITACAO_SENSITIVE_FIELDS) {
+    if (typeof dados[field] === 'string' && dados[field]) dados[field] = encryptSecret(dados[field]);
+  }
+  return {
+    protocolo: sol.protocolo,
+    cnpj: String(sol.cnpj || '').replace(/\D/g, ''),
+    razao_social: sol.razao_social,
+    nome_fantasia: sol.nome_fantasia,
+    tipo_comercio: sol.tipo_comercio || 'Outros',
+    cidade: sol.cidade || '',
+    estado: sol.estado || '',
+    telefone: String(sol.telefone || '').replace(/\D/g, ''),
+    email: sol.email || '',
+    status: sol.status,
+    observacoes_internas: sol.observacoes_internas || '',
+    dados,
+    atualizado_em: sol.atualizado_em || new Date().toISOString()
+  };
+}
+
+async function loadSolicitacoesFromSupabase(store) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) return store;
+  const { data, error } = await supabase
+    .from('solicitacoes')
+    .select('id,protocolo,cnpj,razao_social,nome_fantasia,tipo_comercio,cidade,estado,telefone,email,status,observacoes_internas,criado_em,atualizado_em,dados')
+    .order('criado_em', { ascending: false });
+  if (error) throw new Error(`Falha ao ler as solicitações: ${error.message}`);
+  const list = (data || []).map(rowToSolicitacao).filter((s) => Number.isFinite(s.id));
+  store.solicitacoes = list;
+  store.nextId = list.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+  return store;
+}
+
+async function loadSolicitacaoArquivos(sol) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase || !sol.__uuid) return sol.arquivos || [];
+  const { data, error } = await supabase
+    .from('arquivos_solicitacao')
+    .select('id,tipo_imagem,caminho_arquivo,criado_em')
+    .eq('solicitacao_id', sol.__uuid)
+    .order('criado_em', { ascending: true });
+  if (error) throw new Error(`Falha ao ler os arquivos da solicitação: ${error.message}`);
+  return (data || []).map((a) => ({ id: a.id, tipo_imagem: a.tipo_imagem, caminho_arquivo: a.caminho_arquivo }));
+}
+
+// Persiste e confirma a gravação; sem Supabase configurado mantém apenas o armazenamento local.
+async function persistSolicitacao(sol, { isNew = false, arquivos = [] } = {}) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) return;
+  const row = solicitacaoToRow(sol);
+  if (isNew) {
+    const uuid = crypto.randomUUID();
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .insert({ ...row, id: uuid, idempotency_key: crypto.randomUUID(), criado_em: sol.criado_em })
+      .select('id')
+      .single();
+    if (error || !data) throw new Error(`Falha ao gravar a solicitação: ${error?.message || 'sem confirmação'}`);
+    setSolicitacaoUuid(sol, uuid);
+    if (arquivos.length) {
+      const { error: fileError } = await supabase.from('arquivos_solicitacao').insert(
+        arquivos.map((a) => ({ solicitacao_id: uuid, tipo_imagem: a.tipo_imagem, caminho_arquivo: a.caminho_arquivo }))
+      );
+      if (fileError) {
+        await supabase.from('solicitacoes').delete().eq('id', uuid);
+        throw new Error(`Falha ao gravar os arquivos da solicitação: ${fileError.message}`);
+      }
+    }
+    return;
+  }
+  if (!sol.__uuid) throw new Error('Solicitação sem identificador persistente.');
+  const { data, error } = await supabase
+    .from('solicitacoes')
+    .update(row)
+    .eq('id', sol.__uuid)
+    .select('id')
+    .maybeSingle();
+  if (error || !data) throw new Error(`Falha ao atualizar a solicitação: ${error?.message || 'registro não encontrado'}`);
+}
+
+async function deleteSolicitacaoPersisted(sol) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) return;
+  if (!sol.__uuid) throw new Error('Solicitação sem identificador persistente.');
+  for (const table of ['arquivos_solicitacao', 'historico_status', 'dados_financeiros']) {
+    const { error } = await supabase.from(table).delete().eq('solicitacao_id', sol.__uuid);
+    if (error) throw new Error(`Falha ao excluir dados relacionados (${table}): ${error.message}`);
+  }
+  const { error } = await supabase.from('solicitacoes').delete().eq('id', sol.__uuid);
+  if (error) throw new Error(`Falha ao excluir a solicitação: ${error.message}`);
+}
+
+async function persistSolicitacaoOrRespond(res, sol, options) {
+  try {
+    await persistSolicitacao(sol, options);
+    return true;
+  } catch (error) {
+    console.error('Falha ao persistir a solicitação:', error.message);
+    res.status(503).json({ error: 'Não foi possível salvar os dados do cliente. Tente novamente.' });
+    return false;
+  }
+}
+
 function isMissingMergeFunction(error) {
   return Boolean(error) && (
     error.code === 'PGRST202' ||
@@ -862,6 +1008,21 @@ export default async function handler(req, res) {
     console.error('Falha ao carregar dados persistentes do Supabase:', error.message);
     if (requiresAdminState || (requiresPersistentSiteConfig && hasDurableAdminStateStore())) {
       return res.status(503).json({ error: 'Não foi possível carregar as configurações persistidas.' });
+    }
+  }
+
+  const usesSolicitacoes = pathname === 'solicitacoes'
+    || pathname.startsWith('solicitacoes/')
+    || pathname === 'admin/dashboard'
+    || pathname === 'admin/live-check'
+    || pathname === 'admin/export/csv'
+    || pathname.startsWith('cliente/');
+  if (usesSolicitacoes && getAdminStateSupabase()) {
+    try {
+      await loadSolicitacoesFromSupabase(store);
+    } catch (error) {
+      console.error('Falha ao carregar solicitações do Supabase:', error.message);
+      return res.status(503).json({ error: 'Não foi possível carregar os dados dos clientes.' });
     }
   }
 
@@ -1610,7 +1771,7 @@ export default async function handler(req, res) {
 
       store.solicitacoes.unshift(novaSolicitacao);
       saveStore(store);
-
+      if (!await persistSolicitacaoOrRespond(res, novaSolicitacao, { isNew: true, arquivos: filesAttached })) return;
       return res.status(201).json({
         success: true,
         protocolo,
@@ -1641,6 +1802,12 @@ export default async function handler(req, res) {
     if (!subRoute && method === 'GET') {
       const reveal = urlObj.searchParams.get('reveal_financial') === 'true';
       const clone = JSON.parse(JSON.stringify(sol));
+      try {
+        if (getAdminStateSupabase()) clone.arquivos = await loadSolicitacaoArquivos(sol);
+      } catch (error) {
+        console.error('Falha ao carregar arquivos da solicitação:', error.message);
+        return res.status(503).json({ error: 'Não foi possível carregar os arquivos do cliente.' });
+      }
       if (!reveal) {
         if (clone.pix_1) clone.pix_1 = clone.pix_1.slice(0, 3) + '••••' + clone.pix_1.slice(-3);
         if (clone.conta_1) clone.conta_1 = '••••-' + clone.conta_1.slice(-2);
@@ -1667,6 +1834,7 @@ export default async function handler(req, res) {
         criado_em: agora
       });
       saveStore(store);
+      if (!await persistSolicitacaoOrRespond(res, sol)) return;
       return res.status(200).json({ success: true, message: `Status alterado para '${sol.status}'`, status: sol.status });
     }
 
@@ -1676,11 +1844,18 @@ export default async function handler(req, res) {
       sol.observacoes_internas = body.observacoes_internas || '';
       sol.atualizado_em = new Date().toISOString();
       saveStore(store);
+      if (!await persistSolicitacaoOrRespond(res, sol)) return;
       return res.status(200).json({ success: true, message: 'Observações salvas.' });
     }
 
     // DELETE exclusão LGPD
     if (!subRoute && method === 'DELETE') {
+      try {
+        await deleteSolicitacaoPersisted(sol);
+      } catch (error) {
+        console.error('Falha ao excluir a solicitação:', error.message);
+        return res.status(503).json({ error: 'Não foi possível excluir o registro. Tente novamente.' });
+      }
       store.solicitacoes.splice(index, 1);
       saveStore(store);
       return res.status(200).json({ success: true, message: 'Registro excluído.' });
@@ -1777,6 +1952,7 @@ export default async function handler(req, res) {
 
     sol.ultimo_login = new Date().toISOString();
     saveStore(store);
+    await persistSolicitacao(sol).catch((e) => console.error('Falha ao registrar último login:', e.message));
 
     const token = jwt.sign(
       {
@@ -1838,6 +2014,7 @@ export default async function handler(req, res) {
     sol.ultimo_login = new Date().toISOString();
     sol.atualizado_em = new Date().toISOString();
     saveStore(store);
+    if (!await persistSolicitacaoOrRespond(res, sol)) return;
 
     const token = jwt.sign(
       {
@@ -1900,6 +2077,7 @@ export default async function handler(req, res) {
     sol.senha_hash = bcrypt.hashSync(nova_senha, salt);
     sol.atualizado_em = new Date().toISOString();
     saveStore(store);
+    if (!await persistSolicitacaoOrRespond(res, sol)) return;
 
     return res.status(200).json({ success: true, message: 'Senha alterada com sucesso!' });
   }

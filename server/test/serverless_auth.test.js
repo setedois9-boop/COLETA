@@ -258,3 +258,117 @@ test('WhatsApp number persists via fallback when RPC is missing, rejects invalid
     else process.env.SUPABASE_SERVICE_ROLE_KEY = previousServiceRoleKey;
   }
 });
+test('Client registrations persist in Supabase across requests, encrypt bank data and surface write failures', async () => {
+  const previousUrl = process.env.SUPABASE_URL;
+  const previousServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const jwtSecret = process.env.JWT_SECRET?.trim() ||
+    '6c48d88a3273c0ea10957e9dbd2c789784f8541dbf2391bed73c8f54760116bf';
+  const email = 'admin@pontodecoleta.com.br';
+  const tables = { solicitacoes: [], arquivos_solicitacao: [], historico_status: [], dados_financeiros: [] };
+  let failWrites = false;
+
+  const supabaseMock = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => {
+      const send = (status, body) => {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      const url = new URL(req.url, 'http://mock');
+      const table = url.pathname.replace('/rest/v1/', '');
+      const single = String(req.headers.accept || '').includes('vnd.pgrst.object');
+      const respond = (rows) => single ? send(rows.length ? 200 : 406, rows[0] || { message: 'no rows' }) : send(200, rows);
+      const matches = (row) => [...url.searchParams].every(([key, value]) =>
+        !value.startsWith('eq.') || String(row[key]) === value.slice(3));
+      if (table === 'configuracoes_site') {
+        return send(200, { configuracao: { admin_security_state: { admin_id: 1, email, token_version: 1, senha_hash: 'h' } } });
+      }
+      if (!tables[table]) return send(404, { message: 'unexpected table' });
+      if (req.method !== 'GET' && failWrites) return send(403, { message: 'permission denied' });
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+      if (req.method === 'GET') return respond(tables[table].filter(matches));
+      if (req.method === 'POST') {
+        const rows = Array.isArray(body) ? body : [body];
+        tables[table].push(...rows);
+        return respond(rows);
+      }
+      if (req.method === 'PATCH') {
+        const rows = tables[table].filter(matches);
+        rows.forEach(row => Object.assign(row, body));
+        return respond(rows);
+      }
+      if (req.method === 'DELETE') {
+        tables[table] = tables[table].filter(row => !matches(row));
+        return send(204, null);
+      }
+      return send(404, { message: 'unexpected request' });
+    });
+  });
+
+  await new Promise(resolve => supabaseMock.listen(0, '127.0.0.1', resolve));
+  process.env.SUPABASE_URL = `http://127.0.0.1:${supabaseMock.address().port}`;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
+
+  const token = jwt.sign({ id: 1, email, token_version: 1, scope: 'admin' }, jwtSecret, { expiresIn: '5m' });
+  const call = async (method, url, body) => {
+    const response = createResponse();
+    await handler({
+      method, url, body,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      socket: {}
+    }, response);
+    return response;
+  };
+
+  try {
+    const created = await call('POST', '/api/solicitacoes', {
+      cnpj: '11.222.333/0001-81', razao_social: 'Mercado Teste LTDA', nome_fantasia: 'Mercado Teste',
+      cidade: 'São Paulo', estado: 'SP', email: 'm@teste.com', telefone: '11999999999',
+      conta_1: '123456-7', pix_1: 'chave-pix-secreta',
+      _files: [{ fieldname: 'fachada', filename: 'f.jpg', dataUrl: 'data:image/jpeg;base64,AAAA' }]
+    });
+    assert.equal(created.statusCode, 201);
+    assert.equal(tables.solicitacoes.length, 1);
+    assert.equal(tables.arquivos_solicitacao.length, 1);
+    assert.doesNotMatch(JSON.stringify(tables.solicitacoes[0]), /chave-pix-secreta|123456-7/);
+
+    const list = await call('GET', '/api/solicitacoes');
+    assert.equal(list.body.total, 1);
+    assert.equal(list.body.data[0].nome_fantasia, 'Mercado Teste');
+    const id = list.body.data[0].id;
+
+    const detail = await call('GET', `/api/solicitacoes/${id}?reveal_financial=true`);
+    assert.equal(detail.body.pix_1, 'chave-pix-secreta');
+    assert.equal(detail.body.arquivos.length, 1);
+
+    const patched = await call('PATCH', `/api/solicitacoes/${id}/status`, { status: 'Aprovado', observacao: 'ok' });
+    assert.equal(patched.statusCode, 200);
+    const notes = await call('POST', `/api/solicitacoes/${id}/observacoes`, { observacoes_internas: 'nota interna' });
+    assert.equal(notes.statusCode, 200);
+    const reloaded = await call('GET', `/api/solicitacoes/${id}`);
+    assert.equal(reloaded.body.status, 'Aprovado');
+    assert.equal(reloaded.body.observacoes_internas, 'nota interna');
+    assert.equal(reloaded.body.historico.length, 2);
+
+    failWrites = true;
+    const failed = await call('PATCH', `/api/solicitacoes/${id}/status`, { status: 'Rejeitado' });
+    assert.equal(failed.statusCode, 503);
+    const failedCreate = await call('POST', '/api/solicitacoes', { cnpj: '1', razao_social: 'X', nome_fantasia: 'Y' });
+    assert.equal(failedCreate.statusCode, 503);
+    failWrites = false;
+    assert.equal((await call('GET', `/api/solicitacoes/${id}`)).body.status, 'Aprovado');
+
+    const deleted = await call('DELETE', `/api/solicitacoes/${id}`);
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(tables.solicitacoes.length, 0);
+  } finally {
+    await new Promise((resolve, reject) => {
+      supabaseMock.close(error => error ? reject(error) : resolve());
+    });
+    if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousUrl;
+    if (previousServiceRoleKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousServiceRoleKey;
+  }
+});
