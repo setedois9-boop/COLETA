@@ -566,6 +566,41 @@ async function loadSolicitacoesFromSupabase(store) {
   return store;
 }
 
+const PHOTOS_BUCKET = 'application-photos';
+const STORAGE_PREFIX = 'storage:';
+
+function parseDataUrl(dataUrl) {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(String(dataUrl || ''));
+  if (!match) return null;
+  return { mime: match[1], buffer: Buffer.from(match[2], 'base64') };
+}
+
+async function uploadSolicitacaoPhotos(supabase, uuid, arquivos) {
+  const uploaded = [];
+  try {
+    for (const [index, arquivo] of arquivos.entries()) {
+      const parsed = parseDataUrl(arquivo.caminho_arquivo);
+      if (!parsed) {
+        uploaded.push({ tipo_imagem: arquivo.tipo_imagem, caminho_arquivo: arquivo.caminho_arquivo });
+        continue;
+      }
+      const ext = parsed.mime.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'jpg';
+      const objectPath = `solicitacoes/${uuid}/${arquivo.tipo_imagem}-${index}.${ext}`;
+      const { error } = await supabase.storage.from(PHOTOS_BUCKET).upload(objectPath, parsed.buffer, {
+        contentType: parsed.mime,
+        upsert: true
+      });
+      if (error) throw new Error(`Falha ao enviar a foto ao Storage: ${error.message}`);
+      uploaded.push({ tipo_imagem: arquivo.tipo_imagem, caminho_arquivo: `${STORAGE_PREFIX}${objectPath}` });
+    }
+  } catch (error) {
+    const paths = uploaded.filter((u) => u.caminho_arquivo.startsWith(STORAGE_PREFIX)).map((u) => u.caminho_arquivo.slice(STORAGE_PREFIX.length));
+    if (paths.length) await supabase.storage.from(PHOTOS_BUCKET).remove(paths);
+    throw error;
+  }
+  return uploaded;
+}
+
 async function loadSolicitacaoArquivos(sol) {
   const supabase = getAdminStateSupabase();
   if (!supabase || !sol.__uuid) return sol.arquivos || [];
@@ -575,7 +610,17 @@ async function loadSolicitacaoArquivos(sol) {
     .eq('solicitacao_id', sol.__uuid)
     .order('criado_em', { ascending: true });
   if (error) throw new Error(`Falha ao ler os arquivos da solicitação: ${error.message}`);
-  return (data || []).map((a) => ({ id: a.id, tipo_imagem: a.tipo_imagem, caminho_arquivo: a.caminho_arquivo }));
+  return Promise.all((data || []).map(async (a) => {
+    let caminho = a.caminho_arquivo;
+    if (typeof caminho === 'string' && caminho.startsWith(STORAGE_PREFIX)) {
+      const { data: signed, error: signError } = await supabase.storage
+        .from(PHOTOS_BUCKET)
+        .createSignedUrl(caminho.slice(STORAGE_PREFIX.length), 3600);
+      if (signError) throw new Error(`Falha ao gerar o link da foto: ${signError.message}`);
+      caminho = signed.signedUrl;
+    }
+    return { id: a.id, tipo_imagem: a.tipo_imagem, caminho_arquivo: caminho };
+  }));
 }
 
 // Persiste e confirma a gravação; sem Supabase configurado mantém apenas o armazenamento local.
@@ -593,10 +638,20 @@ async function persistSolicitacao(sol, { isNew = false, arquivos = [] } = {}) {
     if (error || !data) throw new Error(`Falha ao gravar a solicitação: ${error?.message || 'sem confirmação'}`);
     setSolicitacaoUuid(sol, uuid);
     if (arquivos.length) {
+      let stored;
+      try {
+        stored = await uploadSolicitacaoPhotos(supabase, uuid, arquivos);
+      } catch (uploadError) {
+        await supabase.from('solicitacoes').delete().eq('id', uuid);
+        throw uploadError;
+      }
       const { error: fileError } = await supabase.from('arquivos_solicitacao').insert(
-        arquivos.map((a) => ({ solicitacao_id: uuid, tipo_imagem: a.tipo_imagem, caminho_arquivo: a.caminho_arquivo }))
+        stored.map((a) => ({ solicitacao_id: uuid, tipo_imagem: a.tipo_imagem, caminho_arquivo: a.caminho_arquivo }))
       );
       if (fileError) {
+        await supabase.storage.from(PHOTOS_BUCKET).remove(
+          stored.filter((a) => a.caminho_arquivo.startsWith(STORAGE_PREFIX)).map((a) => a.caminho_arquivo.slice(STORAGE_PREFIX.length))
+        );
         await supabase.from('solicitacoes').delete().eq('id', uuid);
         throw new Error(`Falha ao gravar os arquivos da solicitação: ${fileError.message}`);
       }
@@ -618,6 +673,13 @@ async function deleteSolicitacaoPersisted(sol) {
   if (!supabase) return;
   if (!sol.__uuid) throw new Error('Solicitação sem identificador persistente.');
   for (const table of ['arquivos_solicitacao', 'historico_status', 'dados_financeiros']) {
+    if (table === 'arquivos_solicitacao') {
+      const { data: files } = await supabase.from(table).select('caminho_arquivo').eq('solicitacao_id', sol.__uuid);
+      const paths = (files || [])
+        .filter((f) => String(f.caminho_arquivo).startsWith(STORAGE_PREFIX))
+        .map((f) => f.caminho_arquivo.slice(STORAGE_PREFIX.length));
+      if (paths.length) await supabase.storage.from(PHOTOS_BUCKET).remove(paths);
+    }
     const { error } = await supabase.from(table).delete().eq('solicitacao_id', sol.__uuid);
     if (error) throw new Error(`Falha ao excluir dados relacionados (${table}): ${error.message}`);
   }

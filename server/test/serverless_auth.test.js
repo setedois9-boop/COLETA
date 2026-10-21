@@ -276,6 +276,10 @@ test('Client registrations persist in Supabase across requests, encrypt bank dat
         res.end(JSON.stringify(body));
       };
       const url = new URL(req.url, 'http://mock');
+      if (url.pathname.startsWith('/storage/v1/object/sign/')) {
+        return send(200, { signedURL: `/object/sign/application-photos/x?token=t` });
+      }
+      if (url.pathname.startsWith('/storage/v1/')) return send(200, { Key: 'ok' });
       const table = url.pathname.replace('/rest/v1/', '');
       const single = String(req.headers.accept || '').includes('vnd.pgrst.object');
       const respond = (rows) => single ? send(rows.length ? 200 : 406, rows[0] || { message: 'no rows' }) : send(200, rows);
