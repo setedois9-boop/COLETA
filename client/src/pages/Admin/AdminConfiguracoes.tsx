@@ -27,6 +27,7 @@ import { useConfig } from '../../context/ConfigContext';
 import { useAuth } from '../../context/AuthContext';
 import {
   saveSiteConfig,
+  fetchSiteConfig,
   fetch2FAStatus,
   setup2FA,
   directEnable2FA,
@@ -36,7 +37,7 @@ import {
 import { FAQItem, BeneficioItem } from '../../types';
 
 export const AdminConfiguracoes: React.FC = () => {
-  const { config, refreshConfig, updateLocalConfig, loading: configLoading } = useConfig();
+  const { config, updateLocalConfig, loading: configLoading } = useConfig();
   const { admin, refreshAdmin } = useAuth();
 
   // Preservar aba ativa no localStorage para que ao atualizar a página (F5) permaneça na mesma aba
@@ -301,8 +302,15 @@ export const AdminConfiguracoes: React.FC = () => {
     try {
       const payload = buildConfigPayload();
       await saveSiteConfig(payload, cleanCode);
-      updateLocalConfig(payload);
-      await refreshConfig();
+      // Só declara sucesso após reler do servidor e confirmar o número persistido.
+      const persisted = await fetchSiteConfig();
+      if (
+        String(persisted.whatsapp_numero ?? '') !== String(payload.whatsapp_numero) ||
+        String(persisted.whatsapp_mensagem ?? '') !== String(payload.whatsapp_mensagem)
+      ) {
+        throw new Error('O servidor respondeu com sucesso, mas os dados de WhatsApp não foram confirmados no banco. Nada foi aplicado; tente novamente.');
+      }
+      updateLocalConfig(persisted);
 
       setShow2FASaveModal(false);
       setSave2FACode('');

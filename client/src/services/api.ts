@@ -58,7 +58,7 @@ export async function changeAdminPassword(senha_atual: string, nova_senha: strin
 
 // 1. Obter configurações públicas do site
 export async function fetchSiteConfig(): Promise<SiteConfig> {
-  const res = await fetch(`${API_BASE}/config`);
+  const res = await fetch(`${API_BASE}/config`, { cache: 'no-store' });
   if (!res.ok) throw new Error('Falha ao carregar configurações do site');
   return res.json();
 }

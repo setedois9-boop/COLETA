@@ -96,6 +96,24 @@ CREATE TABLE IF NOT EXISTS public.configuracoes_site (
     atualizado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Mescla apenas as chaves recebidas para preservar atualizações concorrentes.
+CREATE OR REPLACE FUNCTION public.merge_configuracoes_site(p_config JSONB)
+RETURNS VOID
+LANGUAGE SQL
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    INSERT INTO public.configuracoes_site (id, configuracao, atualizado_em)
+    VALUES (TRUE, COALESCE(p_config, '{}'::jsonb), NOW())
+    ON CONFLICT (id) DO UPDATE
+    SET configuracao = COALESCE(configuracoes_site.configuracao, '{}'::jsonb)
+        || COALESCE(EXCLUDED.configuracao, '{}'::jsonb),
+        atualizado_em = NOW();
+$$;
+
+REVOKE ALL ON FUNCTION public.merge_configuracoes_site(JSONB) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.merge_configuracoes_site(JSONB) TO service_role;
+
 -- 6. Trigger para atualizar 'atualizado_em' automaticamente
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$

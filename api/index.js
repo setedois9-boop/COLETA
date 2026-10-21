@@ -179,6 +179,46 @@ const DEFAULT_CONFIG = {
   ]
 };
 
+const SUPABASE_CONFIG_KEY_MAP = {
+  site_name: 'nome_site',
+  whatsapp_number: 'whatsapp_numero',
+  whatsapp_message: 'whatsapp_mensagem',
+  collect_financial_data: 'coleta_bancaria_ativa'
+};
+
+function getSiteConfigFromSupabase(configuracion) {
+  if (!configuracion || typeof configuracion !== 'object' || Array.isArray(configuracion)) {
+    throw new Error('As configurações do site no Supabase possuem um formato inválido.');
+  }
+
+  const config = {};
+  // Nomes legados primeiro; os nomes atuais do painel prevalecem independentemente da ordem do JSONB.
+  for (const [legacyKey, appKey] of Object.entries(SUPABASE_CONFIG_KEY_MAP)) {
+    if (Object.prototype.hasOwnProperty.call(configuracion, legacyKey)) {
+      config[appKey] = configuracion[legacyKey];
+    }
+  }
+  for (const [key, value] of Object.entries(configuracion)) {
+    if (key === 'admin_security_state' || SUPABASE_CONFIG_KEY_MAP[key]) continue;
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, key)) {
+      config[key] = value;
+    }
+  }
+  return config;
+}
+
+function getSupabaseSiteConfig(config) {
+  const persisted = Object.fromEntries(
+    Object.entries(config).filter(([key]) => Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, key))
+  );
+  for (const [supabaseKey, appKey] of Object.entries(SUPABASE_CONFIG_KEY_MAP)) {
+    if (Object.prototype.hasOwnProperty.call(config, appKey)) {
+      persisted[supabaseKey] = config[appKey];
+    }
+  }
+  return persisted;
+}
+
 // Seed inicial de solicitações
 const INITIAL_SOLICITACOES = [
   {
@@ -426,7 +466,80 @@ async function syncWithSupabase(store) {
       }
     }
   }
+
+  if (data?.configuracao) {
+    store.config = {
+      ...store.config,
+      ...getSiteConfigFromSupabase(data.configuracao)
+    };
+  }
   return store;
+}
+
+function isMissingMergeFunction(error) {
+  return Boolean(error) && (
+    error.code === 'PGRST202' ||
+    error.code === '42883' ||
+    /merge_configuracoes_site/i.test(error.message || '')
+  );
+}
+
+// Mescla atomicamente via RPC; se a função ainda não existir no banco, usa leitura+mesclagem+upsert.
+async function mergeSiteConfigRow(supabase, patch) {
+  const { error } = await supabase.rpc('merge_configuracoes_site', { p_config: patch });
+  if (!error) return;
+  if (!isMissingMergeFunction(error)) throw new Error(error.message);
+
+  const { data: currentRow, error: readError } = await supabase
+    .from('configuracoes_site')
+    .select('configuracao')
+    .eq('id', true)
+    .maybeSingle();
+  if (readError) throw new Error(readError.message);
+
+  const currentConfig = currentRow?.configuracao || {};
+  if (typeof currentConfig !== 'object' || Array.isArray(currentConfig)) {
+    throw new Error('As configurações persistidas no Supabase possuem um formato inválido.');
+  }
+
+  const { error: upsertError } = await supabase
+    .from('configuracoes_site')
+    .upsert({
+      id: true,
+      configuracao: { ...currentConfig, ...patch },
+      atualizado_em: new Date().toISOString()
+    }, { onConflict: 'id' });
+  if (upsertError) throw new Error(upsertError.message);
+}
+
+async function persistSiteConfigToSupabase(config) {
+  const supabase = getAdminStateSupabase();
+  if (!supabase) {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY não está configurada para persistir as configurações do site.');
+  }
+
+  const patch = getSupabaseSiteConfig(config);
+  try {
+    await mergeSiteConfigRow(supabase, patch);
+  } catch (error) {
+    throw new Error(`Falha ao persistir as configurações do site: ${error.message}`);
+  }
+
+  // Confirma a gravação lendo o registro de volta antes de reportar sucesso.
+  const { data, error: verifyError } = await supabase
+    .from('configuracoes_site')
+    .select('configuracao')
+    .eq('id', true)
+    .maybeSingle();
+  if (verifyError) {
+    throw new Error(`Não foi possível confirmar a gravação: ${verifyError.message}`);
+  }
+  const saved = data?.configuracao || {};
+  for (const key of ['whatsapp_number', 'whatsapp_numero', 'whatsapp_message', 'whatsapp_mensagem']) {
+    if (key in patch && JSON.stringify(saved[key]) !== JSON.stringify(patch[key])) {
+      throw new Error(`A gravação de "${key}" não foi confirmada no banco de dados.`);
+    }
+  }
 }
 
 async function persistSecurityStateToSupabase(admin) {
@@ -435,45 +548,26 @@ async function persistSecurityStateToSupabase(admin) {
     throw new Error('SUPABASE_SERVICE_ROLE_KEY não está configurada para persistir o estado administrativo.');
   }
 
-  const { data: currentRow, error: readError } = await supabase
-    .from('configuracoes_site')
-    .select('configuracao')
-    .eq('id', true)
-    .maybeSingle();
-
-  if (readError) {
-    throw new Error(`Falha ao ler as configurações antes de salvar o estado de segurança: ${readError.message}`);
-  }
-
-  const currentConfig = currentRow?.configuracao || {};
-  if (typeof currentConfig !== 'object' || Array.isArray(currentConfig)) {
-    throw new Error('As configurações persistidas no Supabase possuem um formato inválido.');
-  }
-
-  const { error } = await supabase
-    .from('configuracoes_site')
-    .upsert({
-      id: true,
-      configuracao: {
-        ...currentConfig,
-        admin_security_state: {
-          admin_id: admin.id,
-          email: admin.email,
-          two_factor_enabled: admin.two_factor_enabled,
-          two_factor_secret: admin.two_factor_secret || null,
-          two_factor_temp_secret: admin.two_factor_temp_secret || null,
-          senha_hash: admin.senha_hash,
-          token_version: Number(admin.token_version || 1),
-          last_totp_step: admin.last_totp_step ?? null,
-          last_totp_code: admin.last_totp_code || null,
-          last_totp_time: admin.last_totp_time || null,
-          failed_login_attempts: admin.failed_login_attempts || {},
-          atualizado_em: new Date().toISOString()
-        }
+  const securityPatch = {
+      admin_security_state: {
+        admin_id: admin.id,
+        email: admin.email,
+        two_factor_enabled: admin.two_factor_enabled,
+        two_factor_secret: admin.two_factor_secret || null,
+        two_factor_temp_secret: admin.two_factor_temp_secret || null,
+        senha_hash: admin.senha_hash,
+        token_version: Number(admin.token_version || 1),
+        last_totp_step: admin.last_totp_step ?? null,
+        last_totp_code: admin.last_totp_code || null,
+        last_totp_time: admin.last_totp_time || null,
+        failed_login_attempts: admin.failed_login_attempts || {},
+        atualizado_em: new Date().toISOString()
       }
-    }, { onConflict: 'id' });
+  };
 
-  if (error) {
+  try {
+    await mergeSiteConfigRow(supabase, securityPatch);
+  } catch (error) {
     throw new Error(`Falha ao persistir o estado de segurança do administrador: ${error.message}`);
   }
 }
@@ -739,6 +833,8 @@ export default async function handler(req, res) {
   const requiresAdminState = pathname === 'config' && method === 'PUT'
     || pathname === 'admin'
     || pathname.startsWith('admin/');
+  const requiresPersistentSiteConfig = pathname === 'config'
+    && (method === 'GET' || method === 'PUT');
 
   if (requiresAdminState && !hasDurableAdminStateStore()) {
     return res.status(503).json({
@@ -748,14 +844,24 @@ export default async function handler(req, res) {
   if (requiresAdminState && !JWT_SECRET) {
     return res.status(503).json({ error: 'JWT_SECRET deve ser configurado para autenticação administrativa em produção.' });
   }
+  if (
+    requiresPersistentSiteConfig &&
+    method === 'GET' &&
+    process.env.NODE_ENV === 'production' &&
+    !hasDurableAdminStateStore()
+  ) {
+    return res.status(503).json({
+      error: 'O armazenamento persistente das configurações do site não está configurado.'
+    });
+  }
 
   const store = loadStore();
   try {
     await syncWithSupabase(store);
   } catch (error) {
-    console.error('Falha ao carregar o estado administrativo persistente:', error.message);
-    if (requiresAdminState) {
-      return res.status(503).json({ error: 'Não foi possível carregar o estado de segurança do administrador.' });
+    console.error('Falha ao carregar dados persistentes do Supabase:', error.message);
+    if (requiresAdminState || (requiresPersistentSiteConfig && hasDurableAdminStateStore())) {
+      return res.status(503).json({ error: 'Não foi possível carregar as configurações persistidas.' });
     }
   }
 
@@ -772,6 +878,7 @@ export default async function handler(req, res) {
   // 2. CONFIGURAÇÕES PÚBLICAS E ADMINISTRATIVAS (/api/config)
   if (pathname === 'config') {
     if (method === 'GET') {
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json(store.config);
     }
     if (method === 'PUT') {
@@ -787,6 +894,16 @@ export default async function handler(req, res) {
       }
 
       const body = await parseRequestBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return res.status(400).json({ error: 'O formato das configurações enviadas é inválido.' });
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'whatsapp_numero')) {
+        const digits = String(body.whatsapp_numero ?? '').replace(/\D/g, '');
+        if (!/^\d{10,15}$/.test(digits)) {
+          return res.status(400).json({ error: 'Número de WhatsApp inválido. Informe DDI + DDD + número (10 a 15 dígitos).' });
+        }
+        body.whatsapp_numero = digits;
+      }
       const twoFactorCode = (
         req.headers['x-2fa-code'] ||
         req.headers['x-two-factor-code'] ||
@@ -819,7 +936,14 @@ export default async function handler(req, res) {
       store.admin.last_totp_step = matchedStep;
       if (!await clearFailedAdminLogins(ip, store.admin, res)) return;
       delete body.two_factor_code;
-      store.config = { ...store.config, ...body };
+      const updatedConfig = { ...store.config, ...body };
+      try {
+        await persistSiteConfigToSupabase(updatedConfig);
+      } catch (error) {
+        console.error('Falha ao persistir configurações do site:', error.message);
+        return res.status(503).json({ error: 'Não foi possível salvar as configurações de forma persistente. Tente novamente.' });
+      }
+      store.config = updatedConfig;
       saveStore(store);
       return res.status(200).json({ success: true, message: 'Configurações atualizadas com sucesso mediante validação 2FA!' });
     }
