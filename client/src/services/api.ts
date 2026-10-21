@@ -98,6 +98,24 @@ export async function saveSiteConfig(
   return res.json();
 }
 
+// Reduz fotos antes do envio para respeitar o limite de corpo da requisição serverless (4,5 MB).
+async function compressImage(file: File, maxSide = 1280, quality = 0.75): Promise<File> {
+  if (!file.type.startsWith('image/') || file.size < 400 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch {
+    return file;
+  }
+}
+
 // 3. Enviar solicitação de cadastro (8 etapas)
 export async function submitCadastro(data: FormDataCadastro): Promise<{
   success: boolean;
@@ -159,10 +177,12 @@ export async function submitCadastro(data: FormDataCadastro): Promise<{
 
   // Anexar arquivos de fotos
   if (data.foto_fachada) {
-    formData.append('foto_fachada', data.foto_fachada);
+    const foto = await compressImage(data.foto_fachada);
+    formData.append('foto_fachada', foto, foto.name);
   }
   if (data.foto_interior) {
-    formData.append('foto_interior', data.foto_interior);
+    const foto = await compressImage(data.foto_interior);
+    formData.append('foto_interior', foto, foto.name);
   }
 
   let res: Response;
@@ -183,8 +203,8 @@ export async function submitCadastro(data: FormDataCadastro): Promise<{
         json.error || 'Uma solicitação recente para este CNPJ já foi enviada nos últimos 2 minutos. Aguarde para tentar novamente.'
       );
     }
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
-      throw new Error('Servidor backend indisponível (porta 3001). Certifique-se de que o backend está iniciado.');
+    if (res.status === 413) {
+      throw new Error('As fotos são muito grandes. Envie imagens menores e tente novamente.');
     }
     throw new Error(json.error || 'Falha ao enviar a solicitação. Tente novamente.');
   }

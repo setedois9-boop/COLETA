@@ -546,9 +546,23 @@ async function loadSolicitacoesFromSupabase(store) {
     .select('id,protocolo,cnpj,razao_social,nome_fantasia,tipo_comercio,cidade,estado,telefone,email,status,observacoes_internas,criado_em,atualizado_em,dados')
     .order('criado_em', { ascending: false });
   if (error) throw new Error(`Falha ao ler as solicitações: ${error.message}`);
-  const list = (data || []).map(rowToSolicitacao).filter((s) => Number.isFinite(s.id));
+  const rows = data || [];
+  let nextId = rows.reduce((max, row) => Math.max(max, Number(row.dados?.legacy_id) || 0), 0) + 1;
+  const list = [];
+  // Linhas criadas fora da API (sem legacy_id) recebem um id numérico estável e persistido.
+  for (const row of [...rows].sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em))) {
+    if (Number.isFinite(Number(row.dados?.legacy_id))) continue;
+    const legacyId = nextId++;
+    const { error: updateError } = await supabase
+      .from('solicitacoes')
+      .update({ dados: { ...(row.dados || {}), legacy_id: legacyId } })
+      .eq('id', row.id);
+    if (updateError) throw new Error(`Falha ao indexar a solicitação ${row.protocolo}: ${updateError.message}`);
+    row.dados = { ...(row.dados || {}), legacy_id: legacyId };
+  }
+  for (const row of rows) list.push(rowToSolicitacao(row));
   store.solicitacoes = list;
-  store.nextId = list.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+  store.nextId = nextId;
   return store;
 }
 
