@@ -358,8 +358,15 @@ test('Client registrations persist in Supabase across requests, encrypt bank dat
     failWrites = true;
     const failed = await call('PATCH', `/api/solicitacoes/${id}/status`, { status: 'Rejeitado' });
     assert.equal(failed.statusCode, 503);
-    const failedCreate = await call('POST', '/api/solicitacoes', { cnpj: '1', razao_social: 'X', nome_fantasia: 'Y' });
+    const failedCreate = await call('POST', '/api/solicitacoes', {
+      cnpj: '11222333000181', razao_social: 'X', nome_fantasia: 'Y', telefone: '11999999999', estado: 'SP'
+    });
     assert.equal(failedCreate.statusCode, 503);
+    const invalidCreate = await call('POST', '/api/solicitacoes', {
+      cnpj: '1', razao_social: 'X', nome_fantasia: 'Y', telefone: '11999999999', estado: 'SP'
+    });
+    assert.equal(invalidCreate.statusCode, 400);
+    assert.match(invalidCreate.body.error, /CNPJ/);
     failWrites = false;
     assert.equal((await call('GET', `/api/solicitacoes/${id}`)).body.status, 'Aprovado');
 

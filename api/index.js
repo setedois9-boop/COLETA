@@ -529,7 +529,10 @@ function solicitacaoToRow(sol) {
     tipo_comercio: sol.tipo_comercio || 'Outros',
     cidade: sol.cidade || '',
     estado: sol.estado || '',
-    telefone: String(sol.telefone || '').replace(/\D/g, ''),
+    telefone: (() => {
+      const digits = String(sol.telefone || '').replace(/\D/g, '');
+      return (digits.length === 12 || digits.length === 13) && digits.startsWith('55') ? digits.slice(2) : digits;
+    })(),
     email: sol.email || '',
     status: sol.status,
     observacoes_internas: sol.observacoes_internas || '',
@@ -696,6 +699,17 @@ async function persistSolicitacaoOrRespond(res, sol, options) {
     res.status(503).json({ error: 'Não foi possível salvar os dados do cliente. Tente novamente.' });
     return false;
   }
+}
+
+function normalizeSolicitacaoIdentity(body) {
+  const cnpj = String(body.cnpj || '').replace(/\D/g, '');
+  let telefone = String(body.telefone || '').replace(/\D/g, '');
+  if ((telefone.length === 12 || telefone.length === 13) && telefone.startsWith('55')) telefone = telefone.slice(2);
+  const estado = String(body.estado || '').trim().toUpperCase();
+  if (cnpj.length !== 14) return { error: 'CNPJ inválido. Informe os 14 dígitos.' };
+  if (telefone.length < 10 || telefone.length > 11) return { error: 'Telefone inválido. Informe DDD + número (10 ou 11 dígitos).' };
+  if (!/^[A-Z]{2}$/.test(estado)) return { error: 'Estado (UF) inválido. Informe a sigla com 2 letras.' };
+  return { estado, telefone };
 }
 
 function isMissingMergeFunction(error) {
@@ -1746,6 +1760,8 @@ export default async function handler(req, res) {
       if (!body.cnpj || !body.nome_fantasia || !body.razao_social) {
         return res.status(400).json({ error: 'Campos obrigatórios não preenchidos.' });
       }
+      const identity = normalizeSolicitacaoIdentity(body);
+      if (identity.error) return res.status(400).json({ error: identity.error });
 
       const ano = new Date().getFullYear();
       const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1796,7 +1812,7 @@ export default async function handler(req, res) {
         tipo_comercio: body.tipo_comercio || 'Outros',
         tipo_comercio_outro: body.tipo_comercio_outro || null,
         cep: body.cep || '',
-        estado: body.estado || '',
+        estado: identity.estado,
         cidade: body.cidade || '',
         bairro: body.bairro || '',
         rua: body.rua || '',
